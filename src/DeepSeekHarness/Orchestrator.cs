@@ -1,0 +1,253 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace DShNative;
+
+/**
+ * Boots one harness server for the requested DSH_HOME and keeps it owned for
+ * the whole window lifetime. A second launch of the same home attaches to the
+ * server the first one already owns instead of starting a rival writer.
+ */
+public static class Orchestrator
+{
+    private enum Mode { Cancelled, Attach, Owned }
+
+    private sealed class Outcome : IDisposable
+    {
+        public Mode Mode;
+        public int ExitCode;
+        public string? Error;
+        public ManagedLock? Guard;
+        public ServerLease? Lease;
+        public string? PageUrl;
+
+        public void Dispose()
+        {
+            Guard?.Dispose();
+            Guard = null;
+        }
+    }
+
+    public static int Run(Options o)
+    {
+        return o.NoWindow ? RunHeadless(o) : RunGui(o);
+    }
+
+    // --no-window: boot test, no UI at all
+    private static int RunHeadless(Options o)
+    {
+        var r = Boot(o, status: null, CancellationToken.None);
+        using (r)
+        {
+            if (r.ExitCode != 0)
+            {
+                if (r.Error != null) Ui.Error(o, r.Error);
+                return r.ExitCode;
+            }
+            if (r.Mode == Mode.Owned && r.Lease != null)
+            {
+                Log.Info("=== READY (boot test) ===");
+                ServerManager.Stop(r.Lease);
+                Log.Info("=== boot test complete (server stopped) ===");
+            }
+            return 0;
+        }
+    }
+
+    // Normal launch: splash window with progress while the server boots.
+    private static int RunGui(Options o)
+    {
+        using var cts = new CancellationTokenSource();
+        using var splash = new SplashForm(o.TargetLabel, () => { try { cts.Cancel(); } catch { } });
+
+        splash.Show();
+        var task = Task.Run(() => Boot(o, splash.SetStatus, cts.Token));
+
+        // Pump the splash: it is a normal window (move, minimize, close all work)
+        while (!splash.IsDisposed && !task.IsCompleted)
+        {
+            Application.DoEvents();
+            Thread.Sleep(30);
+        }
+        if (!splash.IsDisposed)
+        {
+            splash.Finish();
+            splash.Close();
+        }
+
+        Outcome r;
+        try
+        {
+            r = task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("unexpected boot error: " + ex);
+            Ui.Error(o, "Unexpected error:\n" + ex.Message);
+            return 1;
+        }
+
+        using (r)
+        {
+            if (r.ExitCode != 0)
+            {
+                if (r.Error != null) Ui.Error(o, r.Error);
+                return r.ExitCode;
+            }
+            if (r.Mode == Mode.Cancelled) return 0;
+
+            RunWindow(o, r);
+            return 0;
+        }
+    }
+
+    private static void RunWindow(Options o, Outcome outcome)
+    {
+        var pageUrl = outcome.PageUrl ?? o.Url;
+        try
+        {
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, o.ProjectDir);
+            Application.Run(form);
+        }
+        finally
+        {
+            if (outcome.Mode == Mode.Owned && outcome.Lease != null)
+            {
+                Log.Info("window closed; stopping the managed server");
+                ServerManager.Stop(outcome.Lease);
+            }
+        }
+        Log.Info("=== exit ===");
+    }
+
+    /**
+     * The actual boot, with progress + cancellation. Runs on a background
+     * task so the splash can stay responsive.
+     */
+    private static Outcome Boot(Options o, Action<string>? status, CancellationToken ct)
+    {
+        void Say(string msg) { status?.Invoke(msg); Log.Info(msg); }
+
+        ManagedLock? guard = null;
+        ServerLease? lease = null;
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // One server owns one DSH_HOME. Two servers writing the same
+            // session and storage files would corrupt them.
+            guard = ManagedLock.TryAcquireHome(o.DshHome);
+            if (!guard.Owner)
+            {
+                Say("Another instance owns this DeepSeek Harness home; attaching to its server ...");
+                var adopted = ServerManager.TryAdoptHome(o);
+                if (adopted != null)
+                {
+                    Log.Info($"attached to the running server on {adopted.Address}:{adopted.Port}");
+                    return new Outcome { Mode = Mode.Attach, Guard = guard, Lease = adopted, PageUrl = adopted.Url };
+                }
+                return Fail(40,
+                    $"Another DeepSeek Harness desktop instance owns the home\n{o.DshHome}\n"
+                    + "but no verified server answered for it. Close that window (or run --stop) and retry.\n\n"
+                    + $"Logs: {AppPaths.LogsDir}",
+                    guard);
+            }
+
+            // The previous owner may have crashed after writing a lease; its
+            // job object already killed the child, so the record is stale.
+            ServerManager.RemoveStaleLease(o.DshHome);
+
+            var tools = Tools.Discover();
+            if (tools.Node == null)
+            {
+                return Fail(10,
+                    "Node.js was not found on PATH.\nInstall it from https://nodejs.org and try again.",
+                    guard);
+            }
+            if (tools.DshMissing)
+            {
+                return Fail(11,
+                    "@deepseek-ai/dsh is not installed globally.\nRun:  npm install -g @deepseek-ai/dsh\n"
+                    + "Then launch this app again.",
+                    guard);
+            }
+
+            var usable = Tools.VerifyDsh(tools);
+            if (!usable)
+            {
+                return Fail(12,
+                    "The installed @deepseek-ai/dsh CLI is incomplete or cannot load its runtime closure.\n"
+                    + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\nThen retry.\n\n"
+                    + $"Logs: {AppPaths.LogsDir}",
+                    guard);
+            }
+
+            if (o.Update)
+            {
+                Say("Updating @deepseek-ai/dsh to the latest npm release ...");
+                var update = Updater.Run(tools, o, usable, ct);
+                ct.ThrowIfCancellationRequested();
+                if (!update.Usable)
+                {
+                    return Fail(13,
+                        (update.Error ?? "The global dsh update failed")
+                        + "\n\nRepair it manually with:  npm install -g @deepseek-ai/dsh@latest\n"
+                        + $"Logs: {AppPaths.LogsDir}",
+                        guard);
+                }
+                tools = Tools.Discover();
+                if (tools.DshMissing || !Tools.VerifyDsh(tools))
+                {
+                    return Fail(14,
+                        "The dsh CLI is not usable after the update.\n"
+                        + "Run  npm install -g @deepseek-ai/dsh@latest  and retry.\n\n"
+                        + $"Logs: {AppPaths.LogsDir}",
+                        guard);
+                }
+            }
+
+            Say($"Starting the DeepSeek Harness server for {o.ProjectDir} ...");
+            lease = ServerManager.Start(tools, o, status, ct);
+            if (lease == null)
+            {
+                return Fail(22,
+                    $"Failed to start the dsh web server.\nServer logs: {AppPaths.LogsDir}",
+                    guard);
+            }
+
+            Say("Verifying the harness endpoint ...");
+            var probe = NetProbe.Probe(lease.Url);
+            if (probe.Status != EndpointStatus.DshReady)
+            {
+                var port = lease.Port;
+                ServerManager.Stop(lease);
+                lease = null;
+                return Fail(21,
+                    $"The server started on port {port} but did not answer as a verified DeepSeek Harness page.\n"
+                    + $"Server logs: {AppPaths.LogsDir}\n\n{probe.Detail}",
+                    guard);
+            }
+
+            Say("Server is ready");
+            return new Outcome { Mode = Mode.Owned, Lease = lease, Guard = guard, PageUrl = lease.Url };
+        }
+        catch (OperationCanceledException)
+        {
+            // Splash closed: stop the server we started, leave everything else alone
+            if (lease != null) ServerManager.Stop(lease);
+            return new Outcome { Mode = Mode.Cancelled, Guard = guard };
+        }
+        catch (Exception ex)
+        {
+            Log.Error("owned flow error: " + ex);
+            if (lease != null) ServerManager.Stop(lease);
+            return Fail(23, "Error while booting the server:\n" + ex.Message, guard);
+        }
+    }
+
+    private static Outcome Fail(int code, string message, ManagedLock? guard)
+        => new Outcome { ExitCode = code, Error = message, Guard = guard };
+}
