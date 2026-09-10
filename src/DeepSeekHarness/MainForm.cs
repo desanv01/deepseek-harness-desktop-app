@@ -30,14 +30,18 @@ public sealed class MainForm : Form
 
     private readonly string _url;
     private readonly string _userDataDir;
+    private readonly string _projectDir;
     private readonly Label _status;
     private WebView2? _web;
     private Color? _pageBg; // measured from the rendered page once loaded
+    private NotifyIcon? _tray;
+    private bool _trayHintShown;
 
     public MainForm(string url, string userDataDir, string projectDir)
     {
         _url = url;
         _userDataDir = userDataDir;
+        _projectDir = projectDir;
 
         var projectName = "";
         try
@@ -66,7 +70,100 @@ public sealed class MainForm : Form
         RecolorStatus();
 
         Load += OnLoadAsync;
-        FormClosing += (_, _) => _web?.Dispose();
+        Resize += OnResizeToTray;
+        FormClosing += (_, _) =>
+        {
+            _tray?.Dispose();
+            _tray = null;
+            _web?.Dispose();
+        };
+    }
+
+    /** Brings the window forward when a later launch asks this instance to focus. */
+    public void FocusFromSignal()
+    {
+        if (IsDisposed) return;
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                if (IsDisposed) return;
+                if (!Visible) Show();
+                ShowInTaskbar = true;
+                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+                Activate();
+                BringToFront();
+            }));
+        }
+        catch
+        {
+            // the window is closing; nothing to bring forward
+        }
+    }
+
+    private void OnResizeToTray(object? sender, EventArgs e)
+    {
+        if (WindowState != FormWindowState.Minimized || !ShowInTaskbar) return;
+        EnsureTray();
+        Hide();
+        ShowInTaskbar = false;
+        if (!_trayHintShown && _tray != null)
+        {
+            _trayHintShown = true;
+            try
+            {
+                _tray.ShowBalloonTip(4000, "DeepSeek Harness",
+                    "Still running in the tray. The server keeps working until you close it.", ToolTipIcon.Info);
+            }
+            catch { }
+        }
+    }
+
+    private void EnsureTray()
+    {
+        if (_tray != null) return;
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Open window", null, (_, _) => RestoreFromTray());
+        menu.Items.Add("Open project folder", null, (_, _) => OpenPath(_projectDir));
+        menu.Items.Add("Open logs", null, (_, _) => OpenPath(AppPaths.LogsDir));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Stop server and exit", null, (_, _) => Close());
+
+        _tray = new NotifyIcon
+        {
+            Icon = Icon ?? SystemIcons.Application,
+            Text = "DeepSeek Harness",
+            Visible = true,
+            ContextMenuStrip = menu,
+        };
+        _tray.DoubleClick += (_, _) => RestoreFromTray();
+    }
+
+    private void RestoreFromTray()
+    {
+        if (IsDisposed) return;
+        ShowInTaskbar = true;
+        if (!Visible) Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+    }
+
+    private static void OpenPath(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path) && !File.Exists(path)) return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not open " + path + ": " + ex.Message);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)

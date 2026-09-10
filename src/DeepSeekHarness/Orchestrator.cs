@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -6,13 +7,13 @@ using System.Windows.Forms;
 namespace DShNative;
 
 /**
- * Boots one harness server for the requested DSH_HOME and keeps it owned for
- * the whole window lifetime. A second launch of the same home attaches to the
- * server the first one already owns instead of starting a rival writer.
+ * Boots one harness server for the resolved DSH_HOME and keeps it owned for
+ * the whole window lifetime. A second launch of the same home hands focus to
+ * the running window instead of starting a rival server.
  */
 public static class Orchestrator
 {
-    private enum Mode { Cancelled, Attach, Owned }
+    private enum Mode { Cancelled, Attach, Owned, Focused }
 
     private sealed class Outcome : IDisposable
     {
@@ -32,12 +33,18 @@ public static class Orchestrator
 
     public static int Run(Options o)
     {
-        return o.NoWindow ? RunHeadless(o) : RunGui(o);
+        var settings = AppSettings.Load();
+        o.ApplySettings(settings);
+        return o.NoWindow ? RunHeadless(o, settings) : RunGui(o, settings);
     }
 
     // --no-window: boot test, no UI at all
-    private static int RunHeadless(Options o)
+    private static int RunHeadless(Options o, AppSettings settings)
     {
+        var project = ResolveProject(o, settings, interactive: false);
+        if (project == null) return 0;
+        o.SetProject(project);
+
         var r = Boot(o, status: null, CancellationToken.None);
         using (r)
         {
@@ -57,8 +64,17 @@ public static class Orchestrator
     }
 
     // Normal launch: splash window with progress while the server boots.
-    private static int RunGui(Options o)
+    private static int RunGui(Options o, AppSettings settings)
     {
+        var project = ResolveProject(o, settings, interactive: true);
+        if (project == null)
+        {
+            Log.Info("no project selected; exiting");
+            return 0;
+        }
+        o.SetProject(project);
+        RememberSettings(o, settings, project);
+
         using var cts = new CancellationTokenSource();
         using var splash = new SplashForm(o.TargetLabel, () => { try { cts.Cancel(); } catch { } });
 
@@ -96,19 +112,56 @@ public static class Orchestrator
                 if (r.Error != null) Ui.Error(o, r.Error);
                 return r.ExitCode;
             }
-            if (r.Mode == Mode.Cancelled) return 0;
+            if (r.Mode is Mode.Cancelled or Mode.Focused) return 0;
 
             RunWindow(o, r);
             return 0;
         }
     }
 
+    /** Persists the resolved choices and moves the project to the front of the recents. */
+    private static void RememberSettings(Options o, AppSettings settings, string project)
+    {
+        settings.ProjectDir = project;
+        settings.DshHome = o.ResolveHome();
+        settings.Port = o.Port;
+        settings.Update = o.Update;
+        settings.Remember(project);
+        settings.Save();
+    }
+
+    /**
+     * The project to open: the explicit flag, then the remembered one, then an
+     * interactive picker. Headless modes fall back to the current directory.
+     */
+    private static string? ResolveProject(Options o, AppSettings settings, bool interactive)
+    {
+        if (!string.IsNullOrWhiteSpace(o.ProjectDir) && Directory.Exists(o.ProjectDir)) return o.ProjectDir;
+        if (!interactive)
+        {
+            var fallback = Environment.CurrentDirectory;
+            Log.Info("no project resolved; using the current directory " + fallback);
+            return fallback;
+        }
+        Log.Info("no project resolved yet; showing the project picker");
+        var picked = ProjectPickerForm.Pick(null, settings);
+        if (picked == null) return null;
+        Log.Info("project selected: " + picked);
+        return picked;
+    }
+
     private static void RunWindow(Options o, Outcome outcome)
     {
         var pageUrl = outcome.PageUrl ?? o.Url;
+        var project = o.ProjectDir ?? Environment.CurrentDirectory;
+        Action? onFocus = null;
+        using var signal = FocusSignal.Create(o.ResolveHome(), () => onFocus?.Invoke());
+
         try
         {
-            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, o.ProjectDir);
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project);
+            onFocus = form.FocusFromSignal;
+            signal?.Start();
             Application.Run(form);
         }
         finally
@@ -129,6 +182,7 @@ public static class Orchestrator
     private static Outcome Boot(Options o, Action<string>? status, CancellationToken ct)
     {
         void Say(string msg) { status?.Invoke(msg); Log.Info(msg); }
+        var home = o.ResolveHome();
 
         ManagedLock? guard = null;
         ServerLease? lease = null;
@@ -139,18 +193,23 @@ public static class Orchestrator
 
             // One server owns one DSH_HOME. Two servers writing the same
             // session and storage files would corrupt them.
-            guard = ManagedLock.TryAcquireHome(o.DshHome);
+            guard = ManagedLock.TryAcquireHome(home);
             if (!guard.Owner)
             {
-                Say("Another instance owns this DeepSeek Harness home; attaching to its server ...");
                 var adopted = ServerManager.TryAdoptHome(o);
                 if (adopted != null)
                 {
+                    if (FocusSignal.Signal(home))
+                    {
+                        Log.Info("another window owns this home; brought it forward and exiting");
+                        return new Outcome { Mode = Mode.Focused, Guard = guard };
+                    }
+                    Say("Another instance owns this DeepSeek Harness home; attaching to its server ...");
                     Log.Info($"attached to the running server on {adopted.Address}:{adopted.Port}");
                     return new Outcome { Mode = Mode.Attach, Guard = guard, Lease = adopted, PageUrl = adopted.Url };
                 }
                 return Fail(40,
-                    $"Another DeepSeek Harness desktop instance owns the home\n{o.DshHome}\n"
+                    $"Another DeepSeek Harness desktop instance owns the home\n{home}\n"
                     + "but no verified server answered for it. Close that window (or run --stop) and retry.\n\n"
                     + $"Logs: {AppPaths.LogsDir}",
                     guard);
@@ -158,7 +217,7 @@ public static class Orchestrator
 
             // The previous owner may have crashed after writing a lease; its
             // job object already killed the child, so the record is stale.
-            ServerManager.RemoveStaleLease(o.DshHome);
+            ServerManager.RemoveStaleLease(home);
 
             var tools = Tools.Discover();
             if (tools.Node == null)

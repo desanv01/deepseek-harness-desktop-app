@@ -14,11 +14,11 @@ public sealed class Options
     /** 0 means "let dsh pick a free port"; the real port comes from its ready line. */
     public int Port { get; private set; }
 
-    /** Working directory of the managed server: the harness workspace it opens. */
-    public string ProjectDir { get; private set; } = Environment.CurrentDirectory;
+    /** Working directory of the managed server, or null when it must be resolved. */
+    public string? ProjectDir { get; private set; }
 
-    /** DSH_HOME for the managed server; one server owns one home. */
-    public string DshHome { get; private set; } = AppPaths.DefaultHome;
+    /** DSH_HOME for the managed server, or null when it must be resolved. */
+    public string? DshHome { get; private set; }
 
     /** Opt-in npm update; off by default so a launch never mutates a working install. */
     public bool Update { get; private set; }
@@ -26,6 +26,15 @@ public sealed class Options
     public bool SelfTest { get; private set; }
     public bool Stop { get; private set; }
     public int ReadyTimeoutSec { get; private set; } = 240;
+
+    /** True when the flag was named on the command line, so settings must not override it. */
+    public bool ProjectSpecified { get; private set; }
+    public bool HomeSpecified { get; private set; }
+    public bool PortSpecified { get; private set; }
+    public bool UpdateSpecified { get; private set; }
+
+    /** The home to use after settings fall back to the app default. */
+    public string ResolveHome() => DshHome ?? AppPaths.DefaultHome;
 
     /** Pop a message box? No in headless modes. */
     public bool ShowDialogs => !NoWindow && !SelfTest;
@@ -54,6 +63,7 @@ public sealed class Options
                 case "--port":
                 case "-port":
                     o.Port = ReadInt(args, ref i, "port", 0, 65_535);
+                    o.PortSpecified = true;
                     break;
                 case "--address":
                 case "-address":
@@ -62,11 +72,13 @@ public sealed class Options
                 case "--project":
                 case "-project":
                     o.ProjectDir = ReadExistingDirectory(args, ref i, "project");
+                    o.ProjectSpecified = true;
                     break;
                 case "--dsh-home":
                 case "-dsh-home":
                 case "--home":
                     o.DshHome = ReadHome(args, ref i);
+                    o.HomeSpecified = true;
                     break;
                 case "--ready-timeout":
                 case "-ready-timeout":
@@ -75,10 +87,12 @@ public sealed class Options
                 case "--update":
                 case "-update":
                     o.Update = true;
+                    o.UpdateSpecified = true;
                     break;
                 case "--no-update":
                 case "-no-update":
                     o.Update = false;
+                    o.UpdateSpecified = true;
                     break;
                 case "--no-window":
                 case "-no-window":
@@ -97,6 +111,22 @@ public sealed class Options
             }
         }
         return o;
+    }
+
+    /** Applies remembered settings only where the command line stayed silent. */
+    internal void ApplySettings(AppSettings settings)
+    {
+        if (!ProjectSpecified && !string.IsNullOrWhiteSpace(settings.ProjectDir)) ProjectDir = settings.ProjectDir;
+        if (!HomeSpecified && !string.IsNullOrWhiteSpace(settings.DshHome)) DshHome = settings.DshHome;
+        if (!PortSpecified) Port = settings.Port;
+        if (!UpdateSpecified) Update = settings.Update;
+    }
+
+    /** Records a project chosen interactively, so later stages treat it as explicit. */
+    internal void SetProject(string projectDir)
+    {
+        ProjectDir = projectDir;
+        ProjectSpecified = true;
     }
 
     private static int ReadInt(string[] args, ref int index, string name, int min, int max)

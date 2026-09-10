@@ -6,6 +6,8 @@ namespace DShNative;
 /** Logs to file + console (when attached). Never throws. */
 public static class Log
 {
+    private const long MaxFileBytes = 4L * 1024 * 1024;
+
     private static readonly object Sync = new();
     private static readonly string FilePath = Path.Combine(AppPaths.LogsDir, "desktop.log");
 
@@ -21,6 +23,7 @@ public static class Log
             lock (Sync)
             {
                 AppPaths.Ensure();
+                RotateIfNeeded();
                 File.AppendAllText(FilePath, line + Environment.NewLine);
             }
         }
@@ -29,5 +32,22 @@ public static class Log
             // logging must never crash the app
         }
         try { Console.WriteLine(line); } catch { }
+    }
+
+    /** Keeps desktop.log bounded by moving it to desktop.log.1 once it grows. */
+    private static void RotateIfNeeded()
+    {
+        try
+        {
+            var info = new FileInfo(FilePath);
+            if (!info.Exists || info.Length < MaxFileBytes) return;
+            var previous = FilePath + ".1";
+            if (File.Exists(previous)) File.Delete(previous);
+            File.Move(FilePath, previous);
+        }
+        catch
+        {
+            // a failed rotation must not stop logging
+        }
     }
 }

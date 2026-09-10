@@ -41,11 +41,14 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 ## What it does
 
 - **No-terminal launch** — starts `dsh web --no-open` as a hidden child process. No console window is ever shown.
+- **Remembers your project** — the chosen folder, home, and port are saved to `settings.json`. Later launches open the same project with no flags; the first launch shows a picker with your recent projects.
 - **Opens your project** — `--project <dir>` becomes the server's working directory, which is what scopes the harness workspace. The window title shows the project name.
 - **OS-assigned port** — starts with `--port 0` and reads the real address from the ready line the harness prints, so port conflicts cannot happen.
 - **Verified endpoint** — confirms the served root document contains the DSH bootstrap global before showing it, so an unrelated local service is never embedded.
 - **Guaranteed shutdown** — the child is assigned to a Windows job object with kill-on-close. When the app exits, crashes, or is force-killed, the server and its descendants are terminated by the OS.
-- **One server per home** — a named mutex keyed by `DSH_HOME` means a second launch attaches to the server the first one owns instead of starting a second writer over the same session files.
+- **One server per home** — a named mutex keyed by `DSH_HOME` means a second launch hands focus to the running window instead of starting a second writer over the same session files.
+- **Tray icon** — minimizing hides the window to the tray; the menu reopens it, opens the project folder or the log directory, and stops the server.
+- **Bounded logs** — `desktop.log` rotates at 4 MB and old server logs are pruned at startup.
 - **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.
 - **Opt-in updates** — `--update` runs `npm install -g @deepseek-ai/dsh@latest` behind a lock and validates the CLI before booting. Without the flag, a launch never mutates a working install.
 - **Theme-aware window** — the title bar and border follow the rendered page background, and the window icon follows the Windows theme.
@@ -54,9 +57,12 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 
 ```mermaid
 flowchart LR
-    App[Desktop app] --> Lock{Home lock}
+    Start[Launch] --> Resolve{Project resolved?}
+    Resolve -->|no| Picker[Project picker]
+    Resolve -->|yes| Lock{Home lock}
+    Picker --> Lock
     Lock -->|owner| Spawn[node dsh web --port 0]
-    Lock -->|busy| Attach[Attach to owned server]
+    Lock -->|busy| Focus[Bring the running window forward]
     Spawn --> Job[Windows job object]
     Spawn --> Ready[Read ready line]
     Ready --> Verify[Verify DSH bootstrap marker]
@@ -67,14 +73,15 @@ flowchart LR
 
 ### Launch sequence
 
-1. The app resolves `node` and the global `@deepseek-ai/dsh` entry, then validates that the CLI loads.
-2. It acquires the per-home mutex. If another instance owns the home, it reads that instance's lease and attaches.
-3. It spawns `dsh web --no-open --host 127.0.0.1 --port 0` with the project as the working directory and the chosen `DSH_HOME`.
-4. The child is assigned to a kill-on-close job object before any output is consumed.
-5. The app reads the child's stdout for the ready line — `dsh web: http://127.0.0.1:<port>/?token=<token>` — which carries both the port and the access token.
-6. It probes that authenticated URL and requires the DSH bootstrap marker in the root document.
-7. The WebView2 window opens on that URL. The lease (PID, start time, port, URL, project) is persisted for other instances.
-8. On close, the app kills the exact child it started, disposes the job handle, and removes the lease.
+1. The app loads `settings.json` and resolves the project: `--project`, then the remembered folder, then an interactive picker with the recent list.
+2. It resolves `node` and the global `@deepseek-ai/dsh` entry, then validates that the CLI loads.
+3. It acquires the per-home mutex. If another instance owns the home, it signals that window to come forward and exits.
+4. It spawns `dsh web --no-open --host 127.0.0.1 --port 0` with the project as the working directory and the chosen `DSH_HOME`.
+5. The child is assigned to a kill-on-close job object before any output is consumed.
+6. The app reads the child's stdout for the ready line — `dsh web: http://127.0.0.1:<port>/?token=<token>` — which carries both the port and the access token.
+7. It probes that authenticated URL and requires the DSH bootstrap marker in the root document.
+8. The WebView2 window opens on that URL. The lease (PID, start time, port, URL, project) is persisted for other instances, and the resolved choices are saved to `settings.json`.
+9. On close, the app kills the exact child it started, disposes the job handle, and removes the lease.
 
 ## Requirements
 
@@ -90,9 +97,10 @@ flowchart LR
 
 ### Run a published build
 
-1. Download `DeepSeekHarness-portable-win-x64-<version>.zip` from Releases.
+1. Download `DeepSeekHarness-win-x64-<version>.zip` from Releases.
 2. Unzip anywhere and run `DeepSeekHarness.exe`.
-3. First launch takes a few seconds: it locates the harness, boots the server, and opens the window.
+3. The first launch shows a project picker; choose the folder to open. The choice is remembered.
+4. A few seconds later the window opens on that project.
 
 Close the window to stop the server.
 
@@ -126,8 +134,8 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--project <dir>` | current directory | Working directory of the managed server: the workspace the window opens |
-| `--dsh-home <dir>` | `%LOCALAPPDATA%\DeepSeekHarness\home` | `DSH_HOME` for the managed server; one server owns one home |
+| `--project <dir>` | remembered project, else picker | Working directory of the managed server: the workspace the window opens |
+| `--dsh-home <dir>` | remembered home, else `%LOCALAPPDATA%\DeepSeekHarness\home` | `DSH_HOME` for the managed server; one server owns one home |
 | `--port <n>` | `0` (OS picks a free port) | Pin the listen port; the real port is read from the ready line either way |
 | `--address <host>` | `127.0.0.1` | Bind address for the managed server |
 | `--ready-timeout <sec>` | `240` | How long to wait for the server's ready line |
@@ -137,6 +145,8 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--self-test` | off | Print an environment report and exit |
 | `--stop` | off | Stop the managed server for the selected home (exit 1 when none was found) |
 
+Command-line flags always win over `settings.json`; anything not named on the command line falls back to the remembered value.
+
 Exit codes: `0` success, `1` runtime error or nothing to stop, `2` invalid arguments, `10`–`14` toolchain problems, `21`/`22` server start or verification failure, `30` endpoint occupied, `40` home owned by another instance.
 
 ## Where things live
@@ -144,32 +154,38 @@ Exit codes: `0` success, `1` runtime error or nothing to stop, `2` invalid argum
 | What | Where |
 |---|---|
 | Sessions, settings, storages | `DSH_HOME` — default `%LOCALAPPDATA%\DeepSeekHarness\home` |
-| App logs | `%LOCALAPPDATA%\DeepSeekHarness\logs\` (`desktop.log`, unique `server-*.out/err.log`, unique `npm-update-*.log`) |
+| App settings | `%LOCALAPPDATA%\DeepSeekHarness\settings.json` — last project, home, port, recent projects |
+| App logs | `%LOCALAPPDATA%\DeepSeekHarness\logs\` (`desktop.log` plus `desktop.log.1` after rotation, unique `server-*.out/err.log`, unique `npm-update-*.log`) |
 | Server lease | `%LOCALAPPDATA%\DeepSeekHarness\instance-<home-key>.json` — PID, start time, port, URL; removed on clean stop |
 | WebView2 local state | `%LOCALAPPDATA%\DeepSeekHarness\webview2\` — safe to delete |
 | Build artifacts | `dist\` and `release\` (git-ignored) |
+
+Deleting `settings.json` simply restores the first-run picker; it holds no credentials.
 
 ## Project structure
 
 ```text
 src/DeepSeekHarness/
-├── Program.cs             # entry point, DPI awareness, top-level error handling
-├── Options.cs             # CLI parsing and validation
-├── Orchestrator.cs        # boot, attach-or-own, window lifetime
+├── Program.cs             # entry point, DPI awareness, log pruning, error handling
+├── Options.cs             # CLI parsing, validation, settings precedence
+├── Settings.cs            # settings.json: last project, home, port, recent projects
+├── Orchestrator.cs        # project resolution, boot, focus handoff, window lifetime
+├── ProjectPickerForm.cs   # first-run / recent-project chooser
 ├── ServerManager.cs       # spawn dsh, parse the ready line, lease, stop
 ├── JobObject.cs           # Win32 job object (kill-on-close)
+├── SingleInstance.cs      # focus event that brings the owning window forward
 ├── Proc.cs                # child process run/spawn/kill, output draining
 ├── ManagedLock.cs         # per-home named mutex
 ├── NetProbe.cs            # endpoint identity probe (DSH bootstrap marker)
 ├── Tools.cs               # node/npm/dsh discovery and CLI validation
 ├── Updater.cs             # opt-in serialized npm update
-├── AppPaths.cs            # %LOCALAPPDATA% layout, home keys, log paths
-├── MainForm.cs            # WebView2 window, theme measurement
+├── AppPaths.cs            # %LOCALAPPDATA% layout, home keys, log pruning
+├── MainForm.cs            # WebView2 window, theme measurement, tray icon
 ├── SplashForm.cs          # startup splash with live status
 ├── NativeTheme.cs         # DWM dark mode and caption colours
 ├── SelfTest.cs            # --self-test report
 ├── StopOnly.cs            # --stop
-├── Log.cs                 # never-throwing file + console logger
+├── Log.cs                 # rotating, never-throwing file + console logger
 └── Ui.cs                  # message-box error surface
 assets/                    # official DeepSeek artwork (regenerated by tools\update-icons.ps1)
 screenshots/               # README images
@@ -182,7 +198,8 @@ build_portable.ps1         # one self-contained exe + zip
 - **Window shows "Starting …" for a long time** — run `DeepSeekHarness.exe --self-test`, raise `--ready-timeout`, and read the newest `server-*.out.log`.
 - **`WebView2 failed to initialize`** — the WebView2 Runtime is missing; the window shows the official install link.
 - **`@deepseek-ai/dsh is not installed globally`** — run `npm install -g @deepseek-ai/dsh`, or launch with `--update`.
-- **"Another instance owns this home"** — a second window is already serving the same `DSH_HOME`. Close it, or point this launch at a different home with `--dsh-home`.
+- **"Another instance owns this home"** — a second window is already serving the same `DSH_HOME`. A normal launch would just bring that window forward; this message means the owner is alive but its server did not answer, so close it (or run `--stop`) and retry.
+- **The project picker appears every launch** — `settings.json` could not be written (check permissions on `%LOCALAPPDATA%\DeepSeekHarness`), or the remembered folder was moved or deleted. Pick the project again to re-record it.
 - **Port already in use** — only possible when you pin one with `--port`; the default `--port 0` cannot conflict.
 - **A server survived a crash** — the job object normally prevents this; if it ever happens, `DeepSeekHarness.exe --stop` stops only the lease whose PID and process start time still match.
 
@@ -192,18 +209,17 @@ Verified on Windows 11 x64 with .NET 8, WebView2 `152.0.4191.66`, and `@deepseek
 
 - `dotnet build -c Release` — clean build;
 - headless boot (`--no-window`) — OS-assigned port, ready line parsed in ~8 s, endpoint verified, server stopped;
-- second launch of the same home — attaches to the running server and leaves it running;
+- GUI launch with `--project` — settings written with the project, home, port, and recent list;
+- second launch with no flags — resolves the project from settings, brings the running window forward, and exits without starting a second server;
 - force-kill of the app — the managed server is gone within seconds;
 - `--stop`, invalid `--port`, unknown flag, missing `--project` — correct exit codes.
 
 Known limitations:
 
 - The app cannot attach to a `dsh web` server it did not start, because a foreign server never publishes its token. It reports the conflict instead of guessing.
-- `--project` defaults to the process working directory; there is no settings file or project picker yet.
-- Log files are unique per launch but are never pruned, and `desktop.log` grows without bound.
-- A second launch of the same home opens a second window attached to the first server; there is no focus-the-existing-window behaviour.
+- One window per home: two projects need two homes (`--dsh-home`) rather than two windows over one server.
 - There is no self-update mechanism. Any future updater must verify a signature or a published hash rather than replacing the executable from an unverified download.
-- No automated test suite or CI is present.
+- No automated test suite or CI is present; the checks above were run by hand.
 
 ## Roadmap
 
@@ -213,10 +229,10 @@ Known limitations:
 - [x] Endpoint verification before display
 - [x] Job-object shutdown guarantee
 - [x] One server per home with attach
-- [ ] Persisted settings and a project picker
-- [ ] Log rotation and retention limits
-- [ ] Single-instance window with focus-on-relaunch
-- [ ] Tray icon and "open logs" menu
+- [x] Persisted settings and a project picker
+- [x] Log rotation and retention limits
+- [x] Single-instance window with focus-on-relaunch
+- [x] Tray icon and "open logs" menu
 - [ ] Signed self-update (hash or signature verified)
 - [ ] Unit tests for options, lease validation, and the endpoint probe
 - [ ] GitHub Actions build and release workflow

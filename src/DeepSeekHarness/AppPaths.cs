@@ -31,6 +31,42 @@ public static class AppPaths
     public static string HomeLeaseFile(string home)
         => Path.Combine(Root, "instance-" + HomeKey(home) + ".json");
 
+    /** User settings: last project, preferred home, pinned port, recent list. */
+    public static string SettingsFile => Path.Combine(Root, "settings.json");
+
+    /** Event a second launch sets to bring the owning window forward. */
+    public static string FocusEventName(string home)
+        => "Local\\DeepSeekHarness-focus-" + HomeKey(home);
+
+    /**
+     * Removes old server and update logs so a long-lived installation cannot
+     * accumulate files. desktop.log is excluded; Log rotates that one.
+     */
+    public static void PruneLogs(int keepDays = 7, int keepFiles = 60)
+    {
+        try
+        {
+            var directory = new DirectoryInfo(LogsDir);
+            if (!directory.Exists) return;
+            var cutoff = DateTime.UtcNow.AddDays(-keepDays);
+            var files = directory.GetFiles("*.log");
+            Array.Sort(files, (a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
+            for (var i = 0; i < files.Length; i++)
+            {
+                var file = files[i];
+                if (file.Name.Equals("desktop.log", StringComparison.OrdinalIgnoreCase)) continue;
+                if (i >= keepFiles || file.LastWriteTimeUtc < cutoff)
+                {
+                    try { file.Delete(); } catch { }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("log pruning failed: " + ex.Message);
+        }
+    }
+
     private static string NormalizeHome(string home)
     {
         try

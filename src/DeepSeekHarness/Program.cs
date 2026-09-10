@@ -25,9 +25,10 @@ internal static class Program
         try
         {
             AppPaths.Ensure();
+            AppPaths.PruneLogs();
             opts = Options.Parse(args);
             Log.Info($"=== DeepSeek Harness desktop start === endpoint {opts.TargetLabel}, "
-                     + $"project {opts.ProjectDir}, DSH_HOME {opts.DshHome}, "
+                     + $"project {opts.ProjectDir ?? "(unresolved)"}, DSH_HOME {opts.ResolveHome()}, "
                      + $"auto-update {(opts.Update ? "on" : "off")}, no-window {opts.NoWindow}");
             if (opts.SelfTest) return SelfTest.Run(opts);
             if (opts.Stop) return StopOnly.Run(opts);

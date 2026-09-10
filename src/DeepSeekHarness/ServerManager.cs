@@ -85,7 +85,9 @@ public static class ServerManager
 
         var outLog = AppPaths.NewLogPath("server", ".out.log");
         var errLog = AppPaths.NewLogPath("server", ".err.log");
-        try { Directory.CreateDirectory(o.DshHome); }
+        var home = o.ResolveHome();
+        var project = o.ProjectDir ?? Environment.CurrentDirectory;
+        try { Directory.CreateDirectory(home); }
         catch (Exception ex) { Log.Warn("could not create the DSH_HOME directory: " + ex.Message); }
 
         var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -93,10 +95,10 @@ public static class ServerManager
         var args = new[] { dsh, "web", "--no-open", "--host", o.Address, "--port", o.Port.ToString() };
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["DSH_HOME"] = o.DshHome,
+            ["DSH_HOME"] = home,
         };
         var spawnOptions = new SpawnOptions(
-            WorkingDirectory: o.ProjectDir,
+            WorkingDirectory: project,
             Environment: environment,
             OnStdoutLine: line =>
             {
@@ -116,7 +118,7 @@ public static class ServerManager
             });
 
         Log.Info($"starting managed server: node {t.DshCli} web --no-open --host {o.Address} --port {o.Port} "
-                 + $"(project {o.ProjectDir}, DSH_HOME {o.DshHome})");
+                 + $"(project {project}, DSH_HOME {home})");
         var spawned = Proc.Spawn(node, args, outLog, errLog, spawnOptions);
         if (spawned == null)
         {
@@ -161,7 +163,7 @@ public static class ServerManager
 
         var lease = new ServerLease(
             spawned.Pid, spawned.StartTimeUtc, o.Address, port, url, token,
-            o.ProjectDir, o.DshHome, outLog, errLog, job);
+            project, home, outLog, errLog, job);
         WriteLease(lease);
         Log.Info($"managed server pid {lease.Pid} is ready at {lease.Address}:{lease.Port} (logs: {outLog})");
         return lease;
@@ -170,7 +172,7 @@ public static class ServerManager
     /** Reads a live, verified lease for this home written by another instance. */
     public static ServerLease? TryAdoptHome(Options o)
     {
-        var stored = ReadLease(AppPaths.HomeLeaseFile(o.DshHome));
+        var stored = ReadLease(AppPaths.HomeLeaseFile(o.ResolveHome()));
         if (stored == null) return null;
         if (!Proc.IsAlive(stored.Pid))
         {
@@ -217,7 +219,7 @@ public static class ServerManager
     /** --stop: kill only the exact lease recorded for the requested home. */
     public static int StopByHome(Options o)
     {
-        var path = AppPaths.HomeLeaseFile(o.DshHome);
+        var path = AppPaths.HomeLeaseFile(o.ResolveHome());
         try
         {
             var stored = ReadLease(path);
