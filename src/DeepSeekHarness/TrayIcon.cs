@@ -9,14 +9,21 @@ namespace DShNative;
 public sealed class TrayIcon : IDisposable
 {
     private readonly NotifyIcon _icon;
+    private readonly ToolStripMenuItem _harnessItem;
     private bool _hintShown;
 
-    public TrayIcon(Icon icon, string projectDir, Action onOpen, Action onExit)
+    public TrayIcon(Icon icon, string projectDir, Action onOpen, Action onExit, Action onCheckHarness, string harnessStatus)
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open window", null, (_, _) => onOpen());
         menu.Items.Add("Open project folder", null, (_, _) => Open(projectDir));
         menu.Items.Add("Open logs", null, (_, _) => Open(AppPaths.LogsDir));
+        menu.Items.Add(new ToolStripSeparator());
+
+        // Shows the installed harness version; refreshed by the background check.
+        _harnessItem = new ToolStripMenuItem(harnessStatus) { Enabled = false };
+        menu.Items.Add(_harnessItem);
+        menu.Items.Add("Check for harness update ...", null, (_, _) => onCheckHarness());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Stop server and exit", null, (_, _) => onExit());
 
@@ -28,6 +35,18 @@ public sealed class TrayIcon : IDisposable
             ContextMenuStrip = menu,
         };
         _icon.DoubleClick += (_, _) => onOpen();
+    }
+
+    /** Updates the harness version line. Call on the UI thread. */
+    public void SetHarnessStatus(string text)
+    {
+        try { _harnessItem.Text = text; } catch { }
+    }
+
+    /** Tooltip under the tray icon; also shows the harness version. */
+    public void SetTooltip(string text)
+    {
+        try { _icon.Text = text.Length > 63 ? text[..63] : text; } catch { }
     }
 
     /** Explains the tray once per process, the first time the window hides. */

@@ -27,6 +27,9 @@ public sealed class MainForm : Form
     private WebView2? _web;
     private Color? _pageBg; // measured from the rendered page once loaded
     private TrayIcon? _tray;
+    private string _harnessStatus = "Harness: checking ...";
+    private HarnessVersions? _harnessVersions;
+    private bool _harnessCheckRunning;
 
     public MainForm(string url, string userDataDir, string projectDir)
     {
@@ -61,6 +64,7 @@ public sealed class MainForm : Form
         RecolorStatus();
 
         Load += OnLoadAsync;
+        Shown += (_, _) => { _ = CheckHarnessAsync(); };
         Resize += OnResizeToTray;
         FormClosing += (_, _) =>
         {
@@ -87,10 +91,144 @@ public sealed class MainForm : Form
     private void OnResizeToTray(object? sender, EventArgs e)
     {
         if (WindowState != FormWindowState.Minimized || !ShowInTaskbar) return;
-        _tray ??= new TrayIcon(Icon ?? SystemIcons.Application, _projectDir, RestoreFromTray, Close);
+        _tray ??= new TrayIcon(Icon ?? SystemIcons.Application, _projectDir, RestoreFromTray, Close,
+                               () => _ = OnCheckHarnessAsync(), _harnessStatus);
+        _tray.SetHarnessStatus(_harnessStatus);
         Hide();
         ShowInTaskbar = false;
         _tray.ShowHintOnce();
+    }
+
+    /**
+     * Reads the npm dist-tags once per window and records the result for the
+     * tray. Read-only: nothing is installed here.
+     */
+    private async Task CheckHarnessAsync()
+    {
+        if (_harnessCheckRunning) return;
+        _harnessCheckRunning = true;
+        try
+        {
+            var installed = Tools.Discover().DshVersion;
+            var info = await HarnessUpdate.QueryAsync(installed).ConfigureAwait(true);
+            _harnessVersions = info;
+
+            if (info == null)
+            {
+                _harnessStatus = installed == null
+                    ? "Harness: version unknown"
+                    : $"Harness v{installed} (update check unavailable)";
+            }
+            else if (info.Available == null)
+            {
+                _harnessStatus = $"Harness v{info.Installed} (up to date)";
+            }
+            else
+            {
+                _harnessStatus = $"Harness v{info.Installed} -> {info.Available} available";
+                Log.Info($"a newer harness is available: {info.Available} (installed {info.Installed})");
+            }
+
+            ApplyHarnessStatus();
+        }
+        finally
+        {
+            _harnessCheckRunning = false;
+        }
+    }
+
+    private void ApplyHarnessStatus()
+    {
+        if (IsDisposed) return;
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                if (IsDisposed || _tray == null) return;
+                _tray.SetHarnessStatus(_harnessStatus);
+                _tray.SetTooltip("DeepSeek Harness - " + _harnessStatus);
+            }));
+        }
+        catch
+        {
+            // the window is closing; the tray is going away with it
+        }
+    }
+
+    /** Tray action: report the harness version and offer to install a newer one. */
+    private async Task OnCheckHarnessAsync()
+    {
+        var installed = Tools.Discover().DshVersion;
+        var info = await HarnessUpdate.QueryAsync(installed).ConfigureAwait(true);
+        _harnessVersions = info;
+
+        if (info == null)
+        {
+            MessageBox.Show(this,
+                "Could not reach the npm registry to check for a harness update.\n\n"
+                + $"Installed: {installed ?? "unknown"}",
+                "Harness update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (info.Available == null)
+        {
+            MessageBox.Show(this,
+                $"DeepSeek Harness {info.Installed} is the newest on the {HarnessUpdate.DefaultChannel} channel.\n\n"
+                + $"latest: {info.Latest ?? "n/a"}\nalpha: {info.Alpha ?? "n/a"}",
+                "Harness update", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var answer = MessageBox.Show(this,
+            $"DeepSeek Harness {info.Available} is available (installed {info.Installed}).\n\n"
+            + "Install it now? The server stops and the window restarts to pick it up.",
+            "Harness update", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer != DialogResult.Yes) return;
+
+        var tools = Tools.Discover();
+        var version = info.Available;
+        Log.Info($"installing harness {version} at the user's request");
+
+        var result = await Task.Run(() => Updater.Install(tools, version)).ConfigureAwait(true);
+        if (!result.Usable)
+        {
+            MessageBox.Show(this,
+                "The harness update failed.\n\n" + (result.Error ?? $"exit code {result.ExitCode}")
+                + $"\n\nLogs: {AppPaths.LogsDir}",
+                "Harness update", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var restart = MessageBox.Show(this,
+            $"DeepSeek Harness {version} is installed.\n\nRestart now to use it?",
+            "Harness update", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        if (restart == DialogResult.Yes) RestartApp();
+    }
+
+    /** Starts a fresh instance; the job object stops this one's server on exit. */
+    private void RestartApp()
+    {
+        try
+        {
+            var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (string.IsNullOrEmpty(exe))
+            {
+                Log.Warn("could not resolve the executable path; restart manually");
+                return;
+            }
+            Log.Info("restarting to pick up the new harness");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = exe,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("restart failed: " + ex.Message);
+        }
+        Close();
     }
 
     private void RestoreFromTray()

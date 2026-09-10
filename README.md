@@ -47,7 +47,8 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Verified endpoint** — confirms the served root document contains the DSH bootstrap global before showing it, so an unrelated local service is never embedded.
 - **Guaranteed shutdown** — the child is assigned to a Windows job object with kill-on-close. When the app exits, crashes, or is force-killed, the server and its descendants are terminated by the OS.
 - **One server per home** — a named mutex keyed by `DSH_HOME` means a second launch hands focus to the running window instead of starting a second writer over the same session files.
-- **Tray icon** — minimizing hides the window to the tray; the menu reopens it, opens the project folder or the log directory, and stops the server.
+- **Tray icon** — minimizing hides the window to the tray; the menu reopens it, opens the project folder or the log directory, shows the installed harness version, checks for a newer harness, and stops the server.
+- **Harness version aware** — on launch it reads the npm `latest` and `alpha` dist-tags once and shows the result in the tray. The check is read-only; installing is a deliberate click that verifies the CLI before the window restarts.
 - **Bounded logs** — `desktop.log` rotates at 4 MB and old server logs are pruned at startup.
 - **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.
 - **Opt-in updates** — `--update` runs `npm install -g @deepseek-ai/dsh@latest` behind a lock and validates the CLI before booting. Without the flag, a launch never mutates a working install.
@@ -137,6 +138,7 @@ DeepSeekHarness.exe --dsh-home C:\dsh-home       use a specific harness home
 DeepSeekHarness.exe --port 8080                  pin the port instead of letting the OS pick
 DeepSeekHarness.exe --update                     update the global dsh first (opt-in)
 DeepSeekHarness.exe --self-test                  environment report and exit
+DeepSeekHarness.exe --check-harness              report installed vs published harness versions
 DeepSeekHarness.exe --stop                       stop the server this app started
 DeepSeekHarness.exe --no-window                  headless boot test: start, verify, stop
 ```
@@ -152,6 +154,7 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--no-update` | on | Explicit alias that keeps updates off |
 | `--no-window` | off | Owned-mode boot test with no UI |
 | `--self-test` | off | Print an environment report and exit |
+| `--check-harness` | off | Print installed vs published harness versions and exit (`0` current, `10` update available) |
 | `--stop` | off | Stop the managed server for the selected home (exit 1 when none was found) |
 
 Command-line flags always win over `settings.json`; anything not named on the command line falls back to the remembered value.
@@ -187,6 +190,7 @@ src/DeepSeekHarness/
 ├── ManagedLock.cs         # per-home named mutex
 ├── NetProbe.cs            # endpoint identity probe (DSH bootstrap marker)
 ├── Tools.cs               # node/npm/dsh discovery and CLI validation
+├── HarnessUpdate.cs       # npm dist-tag check: installed vs published harness
 ├── Updater.cs             # opt-in serialized npm update
 ├── AppPaths.cs            # %LOCALAPPDATA% layout, home keys, log pruning
 ├── MainForm.cs            # WebView2 window, theme measurement, tray handoff
@@ -222,7 +226,8 @@ Verified on Windows 11 x64 with .NET 8, WebView2 `152.0.4191.66`, and `@deepseek
 - GUI launch with `--project` — settings written with the project, home, port, and recent list;
 - second launch with no flags — resolves the project from settings, brings the running window forward, and exits without starting a second server;
 - force-kill of the app — the managed server is gone within seconds;
-- `--stop`, invalid `--port`, unknown flag, missing `--project` — correct exit codes.
+- `--stop`, invalid `--port`, unknown flag, missing `--project` — correct exit codes;
+- `--check-harness` — reported `installed 0.1.2-rc.1 / latest 0.1.5-rc.1 / alpha 0.1.5-alpha.2` and exited 10.
 
 Known limitations:
 
@@ -243,6 +248,7 @@ Known limitations:
 - [x] Log rotation and retention limits
 - [x] Single-instance window with focus-on-relaunch
 - [x] Tray icon and "open logs" menu
+- [x] Harness version display, with an opt-in in-app update
 - [ ] Signed self-update (hash or signature verified)
 - [ ] Unit tests for options, lease validation, and the endpoint probe
 - [ ] GitHub Actions build and release workflow

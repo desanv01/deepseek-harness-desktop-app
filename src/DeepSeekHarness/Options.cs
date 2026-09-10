@@ -25,6 +25,7 @@ public sealed class Options
     public bool NoWindow { get; private set; }
     public bool SelfTest { get; private set; }
     public bool Stop { get; private set; }
+    public bool CheckHarness { get; private set; }
     public int ReadyTimeoutSec { get; private set; } = 240;
 
     /** True when the flag was named on the command line, so settings must not override it. */
@@ -101,6 +102,10 @@ public sealed class Options
                 case "--self-test":
                 case "-self-test":
                     o.SelfTest = true;
+                    break;
+                case "--check-harness":
+                case "-check-harness":
+                    o.CheckHarness = true;
                     break;
                 case "--stop":
                 case "-stop":

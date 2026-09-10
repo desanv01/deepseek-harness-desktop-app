@@ -14,9 +14,19 @@ public sealed class UpdateResult
 /** One serialized npm update of the global dsh installation. */
 public static class Updater
 {
+    /** Updates to the latest npm release; used by the launch-time --update path. */
     public static UpdateResult Run(Tools t, Options o, bool existingInstallUsable, CancellationToken ct = default)
     {
         Log.Info($"checking for the latest @deepseek-ai/dsh on npm for {o.Url} ...");
+        return RunCore(t, "@latest", existingInstallUsable, ct);
+    }
+
+    /** Installs one explicit version; used by the in-app harness update action. */
+    public static UpdateResult Install(Tools t, string version, CancellationToken ct = default)
+        => RunCore(t, "@" + version, existingInstallUsable: true, ct);
+
+    private static UpdateResult RunCore(Tools t, string versionSpec, bool existingInstallUsable, CancellationToken ct)
+    {
         if (string.IsNullOrEmpty(t.Node) || string.IsNullOrEmpty(t.NpmCli))
         {
             const string message = "node or npm was not found; automatic repair/update is unavailable";
@@ -54,9 +64,11 @@ public static class Updater
 
             var outFile = AppPaths.NewLogPath("npm-update", ".out.log");
             var errFile = AppPaths.NewLogPath("npm-update", ".err.log");
+            var packageSpec = "@deepseek-ai/dsh" + versionSpec;
+            Log.Info($"installing {packageSpec} ...");
             var code = Proc.Run(node, new[]
             {
-                npm, "install", "-g", "@deepseek-ai/dsh@latest",
+                npm, "install", "-g", packageSpec,
                 "--no-audit", "--no-fund", "--loglevel=error"
             }, outFile, errFile, 300_000, ct);
 
