@@ -194,79 +194,15 @@ public static class Orchestrator
             // One server owns one DSH_HOME. Two servers writing the same
             // session and storage files would corrupt them.
             guard = ManagedLock.TryAcquireHome(home);
-            if (!guard.Owner)
-            {
-                var adopted = ServerManager.TryAdoptHome(o);
-                if (adopted != null)
-                {
-                    if (FocusSignal.Signal(home))
-                    {
-                        Log.Info("another window owns this home; brought it forward and exiting");
-                        return new Outcome { Mode = Mode.Focused, Guard = guard };
-                    }
-                    Say("Another instance owns this DeepSeek Harness home; attaching to its server ...");
-                    Log.Info($"attached to the running server on {adopted.Address}:{adopted.Port}");
-                    return new Outcome { Mode = Mode.Attach, Guard = guard, Lease = adopted, PageUrl = adopted.Url };
-                }
-                return Fail(40,
-                    $"Another DeepSeek Harness desktop instance owns the home\n{home}\n"
-                    + "but no verified server answered for it. Close that window (or run --stop) and retry.\n\n"
-                    + $"Logs: {AppPaths.LogsDir}",
-                    guard);
-            }
+            if (!guard.Owner) return ForeignOwner(o, home, guard, status);
 
             // The previous owner may have crashed after writing a lease; its
             // job object already killed the child, so the record is stale.
             ServerManager.RemoveStaleLease(home);
 
             var tools = Tools.Discover();
-            if (tools.Node == null)
-            {
-                return Fail(10,
-                    "Node.js was not found on PATH.\nInstall it from https://nodejs.org and try again.",
-                    guard);
-            }
-            if (tools.DshMissing)
-            {
-                return Fail(11,
-                    "@deepseek-ai/dsh is not installed globally.\nRun:  npm install -g @deepseek-ai/dsh\n"
-                    + "Then launch this app again.",
-                    guard);
-            }
-
-            var usable = Tools.VerifyDsh(tools);
-            if (!usable)
-            {
-                return Fail(12,
-                    "The installed @deepseek-ai/dsh CLI is incomplete or cannot load its runtime closure.\n"
-                    + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\nThen retry.\n\n"
-                    + $"Logs: {AppPaths.LogsDir}",
-                    guard);
-            }
-
-            if (o.Update)
-            {
-                Say("Updating @deepseek-ai/dsh to the latest npm release ...");
-                var update = Updater.Run(tools, o, usable, ct);
-                ct.ThrowIfCancellationRequested();
-                if (!update.Usable)
-                {
-                    return Fail(13,
-                        (update.Error ?? "The global dsh update failed")
-                        + "\n\nRepair it manually with:  npm install -g @deepseek-ai/dsh@latest\n"
-                        + $"Logs: {AppPaths.LogsDir}",
-                        guard);
-                }
-                tools = Tools.Discover();
-                if (tools.DshMissing || !Tools.VerifyDsh(tools))
-                {
-                    return Fail(14,
-                        "The dsh CLI is not usable after the update.\n"
-                        + "Run  npm install -g @deepseek-ai/dsh@latest  and retry.\n\n"
-                        + $"Logs: {AppPaths.LogsDir}",
-                        guard);
-                }
-            }
+            var toolFailure = PrepareTools(o, ref tools, status, ct, guard);
+            if (toolFailure != null) return toolFailure;
 
             Say($"Starting the DeepSeek Harness server for {o.ProjectDir} ...");
             lease = ServerManager.Start(tools, o, status, ct);
@@ -305,6 +241,96 @@ public static class Orchestrator
             if (lease != null) ServerManager.Stop(lease);
             return Fail(23, "Error while booting the server:\n" + ex.Message, guard);
         }
+    }
+
+    /** --stop: kill the server this app started for the selected home. */
+    public static int RunStop(Options o)
+    {
+        var home = o.ResolveHome();
+        if (ServerManager.StopByHome(o) > 0)
+        {
+            Log.Info($"stopped the managed server for home {home}");
+            return 0;
+        }
+        Log.Warn($"no managed server found for home {home} (lease absent, stale, or process identity changed)");
+        return 1;
+    }
+
+    /** A live owner for this home: hand it focus, or attach when it cannot answer. */
+    private static Outcome ForeignOwner(Options o, string home, ManagedLock guard, Action<string>? status)
+    {
+        var adopted = ServerManager.TryAdoptHome(o);
+        if (adopted == null)
+        {
+            return Fail(40,
+                $"Another DeepSeek Harness desktop instance owns the home\n{home}\n"
+                + "but no verified server answered for it. Close that window (or run --stop) and retry.\n\n"
+                + $"Logs: {AppPaths.LogsDir}",
+                guard);
+        }
+
+        if (FocusSignal.Signal(home))
+        {
+            Log.Info("another window owns this home; brought it forward and exiting");
+            return new Outcome { Mode = Mode.Focused, Guard = guard };
+        }
+
+        status?.Invoke("Another instance owns this DeepSeek Harness home; attaching to its server ...");
+        Log.Info($"attached to the running server on {adopted.Address}:{adopted.Port}");
+        return new Outcome { Mode = Mode.Attach, Guard = guard, Lease = adopted, PageUrl = adopted.Url };
+    }
+
+    /** Validates the CLI and optionally updates it; null when the boot may continue. */
+    private static Outcome? PrepareTools(Options o, ref Tools tools, Action<string>? status, CancellationToken ct, ManagedLock guard)
+    {
+        if (tools.Node == null)
+        {
+            return Fail(10,
+                "Node.js was not found on PATH.\nInstall it from https://nodejs.org and try again.",
+                guard);
+        }
+        if (tools.DshMissing)
+        {
+            return Fail(11,
+                "@deepseek-ai/dsh is not installed globally.\nRun:  npm install -g @deepseek-ai/dsh\n"
+                + "Then launch this app again.",
+                guard);
+        }
+
+        var usable = Tools.VerifyDsh(tools);
+        if (!usable)
+        {
+            return Fail(12,
+                "The installed @deepseek-ai/dsh CLI is incomplete or cannot load its runtime closure.\n"
+                + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\nThen retry.\n\n"
+                + $"Logs: {AppPaths.LogsDir}",
+                guard);
+        }
+        if (!o.Update) return null;
+
+        status?.Invoke("Updating @deepseek-ai/dsh to the latest npm release ...");
+        Log.Info("Updating @deepseek-ai/dsh to the latest npm release ...");
+        var update = Updater.Run(tools, o, usable, ct);
+        ct.ThrowIfCancellationRequested();
+        if (!update.Usable)
+        {
+            return Fail(13,
+                (update.Error ?? "The global dsh update failed")
+                + "\n\nRepair it manually with:  npm install -g @deepseek-ai/dsh@latest\n"
+                + $"Logs: {AppPaths.LogsDir}",
+                guard);
+        }
+
+        tools = Tools.Discover();
+        if (tools.DshMissing || !Tools.VerifyDsh(tools))
+        {
+            return Fail(14,
+                "The dsh CLI is not usable after the update.\n"
+                + "Run  npm install -g @deepseek-ai/dsh@latest  and retry.\n\n"
+                + $"Logs: {AppPaths.LogsDir}",
+                guard);
+        }
+        return null;
     }
 
     private static Outcome Fail(int code, string message, ManagedLock? guard)

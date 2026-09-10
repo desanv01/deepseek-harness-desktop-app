@@ -81,20 +81,8 @@ public static class AppPaths
         }
     }
 
-    /** Stable, non-secret identity for one bind endpoint. */
-    public static string EndpointKey(string address, int port)
-    {
-        var normalized = address.Trim().ToLowerInvariant() + ":" + port;
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
-    }
-
-    public static string EndpointMutexName(string address, int port)
-        => "Local\\DeepSeekHarness-endpoint-" + EndpointKey(address, port);
-
+    /** Serializes npm updates across launcher instances. */
     public static string UpdateMutexName => "Local\\DeepSeekHarness-npm-update";
-
-    public static string EndpointStateFile(string address, int port)
-        => Path.Combine(Root, "server-" + EndpointKey(address, port) + ".json");
 
     /** A unique log path prevents concurrent launchers from sharing a file handle. */
     public static string NewLogPath(string prefix, string suffix = ".log")

@@ -19,9 +19,6 @@ public sealed class ManagedLock : IDisposable
     public static ManagedLock TryAcquireHome(string home)
         => TryAcquireNamed(AppPaths.HomeMutexName(home), "home " + home);
 
-    public static ManagedLock TryAcquire(string address, int port)
-        => TryAcquireNamed(AppPaths.EndpointMutexName(address, port), $"{address}:{port}");
-
     private static ManagedLock TryAcquireNamed(string name, string label)
     {
         Mutex? mutex = null;

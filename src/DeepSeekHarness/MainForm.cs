@@ -20,22 +20,13 @@ public sealed class MainForm : Form
     private const string DshMarkerScript =
         "(function(){try{return typeof window.__DSH_BOOT__ !== 'undefined';}catch(e){return false;}})()";
 
-    private static readonly Color DarkBg = Color.FromArgb(16, 16, 18);
-    private static readonly Color DarkText = Color.FromArgb(235, 238, 244);
-    private static readonly Color LightBg = Color.FromArgb(250, 250, 250);
-    private static readonly Color LightText = Color.FromArgb(31, 35, 40);
-
-    private static readonly Icon IconLight = LoadIcon("icon-light.ico");
-    private static readonly Icon IconDark = LoadIcon("icon-dark.ico");
-
     private readonly string _url;
     private readonly string _userDataDir;
     private readonly string _projectDir;
     private readonly Label _status;
     private WebView2? _web;
     private Color? _pageBg; // measured from the rendered page once loaded
-    private NotifyIcon? _tray;
-    private bool _trayHintShown;
+    private TrayIcon? _tray;
 
     public MainForm(string url, string userDataDir, string projectDir)
     {
@@ -56,7 +47,7 @@ public sealed class MainForm : Form
         ClientSize = new Size(1280, 820);
         MinimumSize = new Size(860, 560);
 
-        Icon = NativeTheme.IsSystemDark() ? IconDark : IconLight;
+        Icon = Theme.AppIcon;
         ApplyPalette(null); // sets BackColor from the OS theme before anything paints
 
         _status = new Label
@@ -85,15 +76,7 @@ public sealed class MainForm : Form
         if (IsDisposed) return;
         try
         {
-            BeginInvoke(new Action(() =>
-            {
-                if (IsDisposed) return;
-                if (!Visible) Show();
-                ShowInTaskbar = true;
-                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-                Activate();
-                BringToFront();
-            }));
+            BeginInvoke(new Action(RestoreFromTray));
         }
         catch
         {
@@ -104,39 +87,10 @@ public sealed class MainForm : Form
     private void OnResizeToTray(object? sender, EventArgs e)
     {
         if (WindowState != FormWindowState.Minimized || !ShowInTaskbar) return;
-        EnsureTray();
+        _tray ??= new TrayIcon(Icon ?? SystemIcons.Application, _projectDir, RestoreFromTray, Close);
         Hide();
         ShowInTaskbar = false;
-        if (!_trayHintShown && _tray != null)
-        {
-            _trayHintShown = true;
-            try
-            {
-                _tray.ShowBalloonTip(4000, "DeepSeek Harness",
-                    "Still running in the tray. The server keeps working until you close it.", ToolTipIcon.Info);
-            }
-            catch { }
-        }
-    }
-
-    private void EnsureTray()
-    {
-        if (_tray != null) return;
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("Open window", null, (_, _) => RestoreFromTray());
-        menu.Items.Add("Open project folder", null, (_, _) => OpenPath(_projectDir));
-        menu.Items.Add("Open logs", null, (_, _) => OpenPath(AppPaths.LogsDir));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Stop server and exit", null, (_, _) => Close());
-
-        _tray = new NotifyIcon
-        {
-            Icon = Icon ?? SystemIcons.Application,
-            Text = "DeepSeek Harness",
-            Visible = true,
-            ContextMenuStrip = menu,
-        };
-        _tray.DoubleClick += (_, _) => RestoreFromTray();
+        _tray.ShowHintOnce();
     }
 
     private void RestoreFromTray()
@@ -147,23 +101,6 @@ public sealed class MainForm : Form
         WindowState = FormWindowState.Normal;
         Activate();
         BringToFront();
-    }
-
-    private static void OpenPath(string path)
-    {
-        try
-        {
-            if (!Directory.Exists(path) && !File.Exists(path)) return;
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = path,
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            Log.Warn("could not open " + path + ": " + ex.Message);
-        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -177,7 +114,7 @@ public sealed class MainForm : Form
     {
         if (m.Msg == NativeTheme.WmSettingChange && !IsDisposed)
         {
-            Icon = NativeTheme.IsSystemDark() ? IconDark : IconLight;
+            Icon = Theme.AppIcon;
             if (_pageBg == null)
             {
                 ApplyPalette(null);
@@ -283,7 +220,7 @@ public sealed class MainForm : Form
         if (_pageBg != null && NativeTheme.SupportsCustomCaptionColors)
         {
             var bg = _pageBg.Value;
-            var fg = dark ? DarkText : LightText;
+            var fg = dark ? Theme.DarkText : Theme.LightText;
             NativeTheme.SetCaptionColors(Handle, bg, fg);
             NativeTheme.SetBorderColor(Handle, bg);
         }
@@ -291,23 +228,17 @@ public sealed class MainForm : Form
 
     private void ApplyPalette(Color? bg)
     {
-        if (bg is { } page)
-        {
-            BackColor = page;
-            return;
-        }
-        BackColor = NativeTheme.IsSystemDark() ? DarkBg : LightBg;
+        BackColor = bg ?? Theme.Background;
     }
 
     private void RecolorStatus()
     {
         var dark = _pageBg != null ? NativeTheme.IsDark(_pageBg.Value) : NativeTheme.IsSystemDark();
-        var bg = _pageBg ?? (dark ? DarkBg : LightBg);
-        _status.BackColor = bg;
-        _status.ForeColor = dark ? DarkText : LightText;
+        _status.BackColor = _pageBg ?? Theme.Background;
+        _status.ForeColor = dark ? Theme.DarkText : Theme.LightText;
     }
 
-    private Color CurrentBackground() => _pageBg ?? (NativeTheme.IsSystemDark() ? DarkBg : LightBg);
+    private Color CurrentBackground() => _pageBg ?? Theme.Background;
 
     private void SetStatus(string text)
     {
@@ -327,17 +258,6 @@ public sealed class MainForm : Form
             _status.Visible = true;
             _status.BringToFront();
         }
-    }
-
-    private static Icon LoadIcon(string resourceName)
-    {
-        try
-        {
-            using var stream = typeof(MainForm).Assembly.GetManifestResourceStream("DShNative." + resourceName);
-            if (stream != null) return new Icon(stream);
-        }
-        catch { }
-        return SystemIcons.Application;
     }
 
     private static Color? ParseCssColor(string? jsonResult)

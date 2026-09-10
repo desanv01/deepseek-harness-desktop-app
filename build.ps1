@@ -106,6 +106,7 @@ if ($Portable) {
 if ($SingleFile) {
     $name = "DeepSeekHarness-win-x64-$version"
     $out = Join-Path $release $name
+    if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
     Write-Output "publishing self-contained single-file exe -> $out"
     Invoke-Publish -ExtraArgs @(
         '-p:PublishSingleFile=true',
@@ -113,6 +114,8 @@ if ($SingleFile) {
         '-p:EnableCompressionInSingleFile=true',
         '-p:DebugType=None'
     ) -OutDir $out
+    # keep the staging folder to just the exe (drop NuGet XML doc files)
+    Get-ChildItem -LiteralPath $out -File -Filter '*.xml' | Remove-Item -Force
     $exe = Join-Path $out 'DeepSeekHarness.exe'
     $finalExe = Join-Path $release ($name + '.exe')
     Copy-Item -LiteralPath $exe -Destination $finalExe -Force

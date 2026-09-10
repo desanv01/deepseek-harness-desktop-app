@@ -23,15 +23,7 @@ public static class Proc
     /** Runs to completion; exit code, -1 never started, -997 setup failed, -998 cancelled, -999 timed out (tree killed). */
     public static int Run(string exePath, string[] args, string? outFile, string? errFile, int timeoutMs, CancellationToken ct = default)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = exePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = outFile != null,
-            RedirectStandardError = errFile != null,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        var psi = StartInfo(exePath, args, outFile != null, errFile != null);
 
         using var p = new Process { StartInfo = psi };
         try
@@ -104,15 +96,7 @@ public static class Proc
     /** Fire-and-forget start with workspace, environment, and a stdout line hook. */
     public static SpawnedProcess? Spawn(string exePath, string[] args, string outFile, string errFile, SpawnOptions? options)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = exePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        var psi = StartInfo(exePath, args, redirectOut: true, redirectErr: true);
         if (!string.IsNullOrEmpty(options?.WorkingDirectory)) psi.WorkingDirectory = options!.WorkingDirectory!;
         if (options?.Environment != null)
         {
@@ -154,18 +138,6 @@ public static class Proc
             Log.Error("spawn failed: " + ex.Message);
             return null;
         }
-    }
-
-    public static void KillTree(int pid)
-    {
-        if (pid <= 0) return;
-        try
-        {
-            using var p = Process.GetProcessById(pid);
-            p.Kill(entireProcessTree: true);
-            p.WaitForExit(5000);
-        }
-        catch { }
     }
 
     public static bool IsAlive(int pid)
@@ -253,6 +225,21 @@ public static class Proc
             }
         }
         await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /** One headless child-process specification; output redirection is per caller. */
+    private static ProcessStartInfo StartInfo(string exePath, string[] args, bool redirectOut, bool redirectErr)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = exePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = redirectOut,
+            RedirectStandardError = redirectErr,
+        };
+        foreach (var argument in args) psi.ArgumentList.Add(argument);
+        return psi;
     }
 
     private static void KillAndWait(Process? p)

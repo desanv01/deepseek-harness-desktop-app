@@ -51,19 +51,6 @@ public static class NetProbe
         MaxResponseContentBufferSize = 256 * 1024,
     };
 
-    public static bool IsHttp200(string url)
-    {
-        try
-        {
-            using var resp = Http.GetAsync(url).GetAwaiter().GetResult();
-            return resp.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     /**
      * Classifies one endpoint without exposing arbitrary local HTTP services in
      * the embedded browser. Transient HTTP failures remain Starting so a dsh

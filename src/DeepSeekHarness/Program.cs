@@ -31,7 +31,7 @@ internal static class Program
                      + $"project {opts.ProjectDir ?? "(unresolved)"}, DSH_HOME {opts.ResolveHome()}, "
                      + $"auto-update {(opts.Update ? "on" : "off")}, no-window {opts.NoWindow}");
             if (opts.SelfTest) return SelfTest.Run(opts);
-            if (opts.Stop) return StopOnly.Run(opts);
+            if (opts.Stop) return Orchestrator.RunStop(opts);
             return Orchestrator.Run(opts);
         }
         catch (ArgumentException ex)

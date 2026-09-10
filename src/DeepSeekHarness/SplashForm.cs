@@ -14,30 +14,19 @@ namespace DShNative;
  */
 public sealed class SplashForm : Form
 {
-    private static readonly Color DarkBg = Color.FromArgb(16, 16, 18);
-    private static readonly Color DarkText = Color.FromArgb(235, 238, 244);
-    private static readonly Color LightBg = Color.FromArgb(250, 250, 250);
-    private static readonly Color LightText = Color.FromArgb(31, 35, 40);
-    private static readonly Color DarkHint = Color.FromArgb(148, 152, 162);
-    private static readonly Color LightHint = Color.FromArgb(110, 115, 125);
-
-    private static readonly Icon IconLight = LoadIcon("icon-light.ico");
-    private static readonly Icon IconDark = LoadIcon("icon-dark.ico");
-
     private readonly PictureBox _splash;
     private readonly Label _status;
     private readonly Action _onCancel;
     private MemoryStream? _gifStream;
     private bool _finished;
 
-    public SplashForm(string url, Action onCancel)
+    public SplashForm(string target, Action onCancel)
     {
         _onCancel = onCancel;
-        var dark = NativeTheme.IsSystemDark();
-        var bg = dark ? DarkBg : LightBg;
+        var bg = Theme.Background;
 
         Text = "DeepSeek Harness";
-        Icon = dark ? IconDark : IconLight;
+        Icon = Theme.AppIcon;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MinimizeBox = true;
         MaximizeBox = false;
@@ -72,7 +61,7 @@ public sealed class SplashForm : Form
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 10f),
-            ForeColor = dark ? DarkText : LightText,
+            ForeColor = Theme.Foreground,
             Text = "Starting DeepSeek Harness ...",
         };
         table.Controls.Add(_status, 0, 1);
@@ -82,7 +71,7 @@ public sealed class SplashForm : Form
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 8.5f),
-            ForeColor = dark ? DarkHint : LightHint,
+            ForeColor = Theme.Hint,
             Text = "You can move or minimize this window. Closing it cancels startup.",
         };
         table.Controls.Add(hint, 0, 2);
@@ -131,16 +120,5 @@ public sealed class SplashForm : Form
         {
             Log.Warn("splash gif could not be loaded: " + ex.Message);
         }
-    }
-
-    private static Icon LoadIcon(string resourceName)
-    {
-        try
-        {
-            using var stream = typeof(SplashForm).Assembly.GetManifestResourceStream("DShNative." + resourceName);
-            if (stream != null) return new Icon(stream);
-        }
-        catch { }
-        return SystemIcons.Application;
     }
 }
