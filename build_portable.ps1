@@ -22,15 +22,17 @@
       .\build_portable.ps1                # build single-file exe + zip
       .\build_portable.ps1 -RefreshIcons  # re-fetch the official DeepSeek
                                           # icons from the websites first
+      .\build_portable.ps1 -RestoreSource C:\offline-nuget   # build offline
 .EXAMPLE
     pwsh -NoProfile -File .\build_portable.ps1
 #>
 param(
-    [switch]$RefreshIcons
+    [switch]$RefreshIcons,
+    [string]$RestoreSource
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-& (Join-Path $root 'build.ps1') -SingleFile -RefreshIcons:$RefreshIcons
+& (Join-Path $root 'build.ps1') -SingleFile -RefreshIcons:$RefreshIcons -RestoreSource $RestoreSource
 exit $LASTEXITCODE

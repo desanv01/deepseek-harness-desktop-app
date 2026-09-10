@@ -117,6 +117,15 @@ cd deepseek-harness-desktop-app
 .\build_portable.ps1
 ```
 
+`build_portable.ps1` is a thin alias for `build.ps1 -SingleFile`. Both accept `-RestoreSource` to restore packages from a folder or feed instead of the machine's configured NuGet sources — useful for a disconnected or air-gapped machine:
+
+```powershell
+.\build.ps1 -SingleFile -RestoreSource C:\offline-nuget   # folder of .nupkg files
+.\build.ps1 -Portable  -RestoreSource https://my-feed/v3/index.json
+```
+
+A missing folder exits with code `2` and a clear message rather than a NuGet stack trace.
+
 Open `DeepSeekHarness.sln` in Visual Studio and use the `PortableFolder` or `PortableSingleFile` publish profile if you prefer the Publish dialog.
 
 ## Command-line reference

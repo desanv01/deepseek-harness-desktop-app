@@ -2,7 +2,8 @@ param(
     [switch]$SelfContained,   # legacy alias of -SingleFile
     [switch]$SingleFile,      # lone self-contained exe (BunkrDownloader-style) + zip
     [switch]$Portable,        # self-contained exe+DLLs folder + zip (CyberleekViewer-style)
-    [switch]$RefreshIcons
+    [switch]$RefreshIcons,
+    [string]$RestoreSource    # NuGet source to restore from (folder or URL) instead of nuget.org
 )
 <#
 .SYNOPSIS
@@ -21,6 +22,10 @@ param(
                  (BunkrDownloader-style).
     -RefreshIcons  First re-fetches the official DeepSeek icons
                  (tools\update-icons.ps1) and regenerates the .ico assets.
+    -RestoreSource  Restore NuGet packages from this source instead of the
+                 machine's configured feeds. Use a folder of .nupkg files to
+                 build offline, or an alternate feed URL. The restore runs
+                 once up front and the publish step then skips its own restore.
 
     Artifacts land in release\ (git-ignored, ready for GitHub Releases):
       release\DeepSeekHarness-portable-win-x64-<ver>\        (folder; -Portable)
@@ -33,12 +38,19 @@ param(
     .\build.ps1 -Portable       # portable folder + zip
     .\build.ps1 -SingleFile     # lone portable exe + zip
     .\build.ps1 -Portable -RefreshIcons
+    .\build.ps1 -SingleFile -RestoreSource C:\offline-nuget   # build without nuget.org
 #>
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $proj = Join-Path $root 'src\DeepSeekHarness\DeepSeekHarness.csproj'
 $dist = Join-Path $root 'dist'
 $release = Join-Path $root 'release'
+
+if ($RestoreSource -and $RestoreSource -notmatch '^[a-z][a-z0-9+.-]*://' -and -not (Test-Path -LiteralPath $RestoreSource)) {
+    # A terminating Write-Error would exit 1 before the documented code.
+    [Console]::Error.WriteLine(("error: restore source not found: {0}" -f $RestoreSource))
+    exit 2
+}
 
 if ($RefreshIcons) {
     pwsh -NoProfile -File (Join-Path $root 'tools\update-icons.ps1')
@@ -52,10 +64,22 @@ function Get-Version {
     return '0.0.0'
 }
 
+function Invoke-Restore {
+    if (-not $RestoreSource) { return }
+    Write-Output ("restoring NuGet packages from {0}" -f $RestoreSource)
+    dotnet restore $proj -r win-x64 --source $RestoreSource
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 function Invoke-Publish {
-    param([string[]]$ExtraArgs, [string]$OutDir)
+    param([string[]]$ExtraArgs, [string]$OutDir, [string]$SelfContainedMode = 'true')
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutDir) | Out-Null
-    dotnet publish $proj -c Release -r win-x64 --self-contained true @ExtraArgs -o $OutDir
+    $publishArgs = @('publish', $proj, '-c', 'Release', '-r', 'win-x64',
+                     '--self-contained', $SelfContainedMode)
+    if ($RestoreSource) { $publishArgs += '--no-restore' }
+    $publishArgs += $ExtraArgs
+    $publishArgs += @('-o', $OutDir)
+    & dotnet @publishArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
@@ -76,12 +100,12 @@ if ($Portable -and $SingleFile) {
     $SingleFile = $false
 }
 
+Invoke-Restore
+
 # --- default: local dev exe (framework-dependent) ----------------------------
 if (-not $Portable -and -not $SingleFile) {
     Write-Output 'publishing dev exe (framework-dependent single file) -> dist\'
-    New-Item -ItemType Directory -Force -Path $dist | Out-Null
-    dotnet publish $proj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o $dist
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-Publish -ExtraArgs @('-p:PublishSingleFile=true') -OutDir $dist -SelfContainedMode 'false'
     Write-Output ("published: {0}" -f (Join-Path $dist 'DeepSeekHarness.exe'))
     exit 0
 }
