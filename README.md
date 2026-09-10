@@ -247,6 +247,8 @@ Known limitations:
 - [ ] Unit tests for options, lease validation, and the endpoint probe
 - [ ] GitHub Actions build and release workflow
 
+The detailed gameplan for the remaining items — design, acceptance criteria, risks, and milestones — is in [ROADMAP.md](ROADMAP.md).
+
 ## Security
 
 - The app talks only to a loopback harness server; harness data stays in local files under `DSH_HOME`.
