@@ -32,6 +32,8 @@ public static class SelfTest
         Line("DSH_HOME    : " + o.ResolveHome());
         Line("endpoint    : " + o.TargetLabel + (o.Port == 0 ? " (OS picks a free port)" : ""));
         Line("webview2    : " + webView2);
+        Line("data root   : " + AppPaths.Root
+             + (AppPaths.IsPortable ? $" (from {AppPaths.RootEnvVar})" : " (per-user default)"));
         Line("settings    : " + AppPaths.SettingsFile);
 
         var lease = ServerManager.TryAdoptHome(o);

@@ -5,12 +5,45 @@ using System.Text;
 
 namespace DShNative;
 
-/** App-data layout under %LOCALAPPDATA%\DeepSeekHarness. */
+/** App-data layout under %LOCALAPPDATA%\DeepSeekHarness, or $DSH_DESKTOP_HOME. */
 public static class AppPaths
 {
-    public static string Root { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DeepSeekHarness");
+    /**
+     * Set this to keep every file the app owns - settings, logs, leases, the
+     * WebView2 profile - under one directory instead of %LOCALAPPDATA%, which
+     * makes the app portable and lets tests run against a scratch root.
+     */
+    public const string RootEnvVar = "DSH_DESKTOP_HOME";
+
+    public static string Root { get; } = ResolveRoot();
+
+    /** True when the root came from the environment rather than %LOCALAPPDATA%. */
+    public static bool IsPortable { get; } = !string.IsNullOrWhiteSpace(
+        Environment.GetEnvironmentVariable(RootEnvVar));
+
+    private static string ResolveRoot()
+    {
+        var custom = Environment.GetEnvironmentVariable(RootEnvVar);
+        if (!string.IsNullOrWhiteSpace(custom))
+        {
+            try
+            {
+                var full = Path.GetFullPath(custom.Trim().Trim('"'));
+                // Keep a drive or share root intact ("C:\" must not become "C:").
+                var basePath = Path.GetPathRoot(full) ?? string.Empty;
+                return full.Length > basePath.Length
+                    ? full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    : full;
+            }
+            catch
+            {
+                // an unusable override falls back to the per-user default
+            }
+        }
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DeepSeekHarness");
+    }
 
     public static string LogsDir => Path.Combine(Root, "logs");
     public static string WebView2Data => Path.Combine(Root, "webview2");

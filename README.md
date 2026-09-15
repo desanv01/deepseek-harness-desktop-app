@@ -175,6 +175,15 @@ Exit codes: `0` success, `1` runtime error or nothing to stop, `2` invalid argum
 
 Deleting `settings.json` simply restores the first-run picker; it holds no credentials.
 
+Set `DSH_DESKTOP_HOME` to relocate everything the app owns — settings, logs, leases, and the WebView2 profile — under one directory instead of `%LOCALAPPDATA%`. That makes the app portable (keep it on a USB stick next to the exe) and gives tests a scratch root to run against:
+
+```powershell
+$env:DSH_DESKTOP_HOME = "D:\portable\DeepSeekHarness"
+.\DeepSeekHarness.exe
+```
+
+`--self-test` reports which root is in use. The variable affects only the app's own files: the harness home is still chosen by `--dsh-home` / the remembered setting.
+
 ## Project structure
 
 ```text

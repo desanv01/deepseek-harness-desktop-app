@@ -30,6 +30,8 @@ internal static class Program
             Log.Info($"=== DeepSeek Harness desktop start === endpoint {opts.TargetLabel}, "
                      + $"project {opts.ProjectDir ?? "(unresolved)"}, DSH_HOME {opts.ResolveHome()}, "
                      + $"auto-update {(opts.Update ? "on" : "off")}, no-window {opts.NoWindow}");
+            Log.Info($"app data root: {AppPaths.Root}"
+                     + (AppPaths.IsPortable ? $" (from {AppPaths.RootEnvVar})" : ""));
             if (opts.SelfTest) return SelfTest.Run(opts);
             if (opts.CheckHarness) return HarnessUpdate.RunCheck();
             if (opts.Stop) return Orchestrator.RunStop(opts);
