@@ -7,7 +7,25 @@ using System.Threading.Tasks;
 namespace DShNative;
 
 /** Installed versus published DeepSeek Harness versions. */
-public sealed record HarnessVersions(string? Installed, string? Latest, string? Alpha, string? Available);
+public sealed record HarnessVersions(string? Installed, string? Latest, string? Alpha, string? Available)
+{
+    /** False when no usable CLI was found, so "available" means "can be installed". */
+    public bool InstalledKnown => !string.IsNullOrWhiteSpace(Installed);
+
+    /** One line for the tray and the CLI, honest about a missing install. */
+    public string StatusLine(string channel)
+    {
+        if (!InstalledKnown)
+        {
+            return Available == null
+                ? "Harness: not installed"
+                : $"Harness: not installed ({Available} can be installed)";
+        }
+        return Available == null
+            ? $"Harness v{Installed} (up to date)"
+            : $"Harness v{Installed} -> {Available} available";
+    }
+}
 
 /**
  * Reads the npm dist-tags for @deepseek-ai/dsh and reports whether a newer
@@ -71,10 +89,11 @@ public static class HarnessUpdate
             return 1;
         }
 
-        Console.WriteLine($"installed : {info.Installed ?? "unknown"}");
+        Console.WriteLine($"installed : {info.Installed ?? "not installed"}");
         Console.WriteLine($"latest    : {info.Latest ?? "n/a"}");
         Console.WriteLine($"alpha     : {info.Alpha ?? "n/a"}");
         Console.WriteLine($"available : {info.Available ?? "none"}");
+        if (!info.InstalledKnown) Console.WriteLine("state     : no usable CLI was found; run --repair-harness");
         Log.Info($"harness check: installed {info.Installed}, latest {info.Latest}, "
                  + $"alpha {info.Alpha}, available {info.Available ?? "none"}");
         return info.Available == null ? 0 : 10;

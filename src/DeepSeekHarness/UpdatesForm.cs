@@ -403,7 +403,7 @@ public sealed class UpdatesForm : Form
     private async Task CheckHarnessAsync()
     {
         _harnessStatus.Text = "Reading the npm registry ...";
-        _harnessInstalled.Text = Tools.Discover().DshVersion ?? "unknown";
+        _harnessInstalled.Text = Tools.Discover().DshVersion ?? "not installed";
         var info = await HarnessUpdate.QueryAsync(_harnessInstalled.Text, HarnessUpdate.DefaultChannel)
             .ConfigureAwait(true);
         _harness = info;
@@ -417,9 +417,11 @@ public sealed class UpdatesForm : Form
         }
 
         _harnessChannels.Text = $"latest {info.Latest ?? "n/a"}    alpha {info.Alpha ?? "n/a"}";
-        _harnessStatus.Text = info.Available == null
-            ? $"{info.Installed} is the newest on the {HarnessUpdate.DefaultChannel} channel."
-            : $"{info.Available} is available (installed {info.Installed}).";
+        _harnessStatus.Text = info.InstalledKnown
+            ? info.Available == null
+                ? $"{info.Installed} is the newest on the {HarnessUpdate.DefaultChannel} channel."
+                : $"{info.Available} is available (installed {info.Installed})."
+            : "No usable harness CLI was found; installing one also repairs a broken install.";
         _harnessInstall.Enabled = info.Available != null;
         _harnessRestart.Enabled = true;
     }

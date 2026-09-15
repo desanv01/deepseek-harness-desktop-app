@@ -451,10 +451,10 @@ public static class UpdateCli
 
         var tools = Tools.Discover();
         var harness = HarnessUpdate.QueryAsync(tools.DshVersion).GetAwaiter().GetResult();
-        Console.WriteLine($"harness installed : {tools.DshVersion ?? "unknown"}");
+        Console.WriteLine($"harness installed : {tools.DshVersion ?? "not installed"}");
         Console.WriteLine($"harness latest    : {harness?.Latest ?? "n/a"}");
         Console.WriteLine($"harness alpha     : {harness?.Alpha ?? "n/a"}");
-        Console.WriteLine($"harness status    : {(harness == null ? "check failed" : harness.Available == null ? "up to date" : harness.Available + " available")}");
+        Console.WriteLine($"harness status    : {DescribeHarness(harness)}");
         Console.WriteLine("== done ==");
 
         var anyUpdate = app.UpdateAvailable || harness?.Available != null;
@@ -467,6 +467,14 @@ public static class UpdateCli
     {
         var line = (text ?? "").ReplaceLineEndings("\n").Split('\n').FirstOrDefault(l => l.Trim().Length > 0);
         return string.IsNullOrWhiteSpace(line) ? "(no release notes)" : line.Trim().TrimEnd('*', '#').Trim();
+    }
+
+    /** "up to date", "0.1.5-rc.1 available", or an honest "not installed". */
+    private static string DescribeHarness(HarnessVersions? harness)
+    {
+        if (harness == null) return "check failed";
+        if (harness.Available == null) return harness.InstalledKnown ? "up to date" : "not installed";
+        return harness.InstalledKnown ? harness.Available + " available" : $"not installed; {harness.Available} can be installed";
     }
 
     /**

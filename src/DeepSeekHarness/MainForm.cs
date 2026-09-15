@@ -235,14 +235,13 @@ public sealed class MainForm : Form
                     ? "Harness: version unknown"
                     : $"Harness v{installed} (update check unavailable)";
             }
-            else if (info.Available == null)
-            {
-                _harnessStatus = $"Harness v{info.Installed} (up to date)";
-            }
             else
             {
-                _harnessStatus = $"Harness v{info.Installed} -> {info.Available} available";
-                Log.Info($"a newer harness is available: {info.Available} (installed {info.Installed})");
+                _harnessStatus = info.StatusLine(HarnessUpdate.DefaultChannel);
+                if (info.Available != null && info.InstalledKnown)
+                {
+                    Log.Info($"a newer harness is available: {info.Available} (installed {info.Installed})");
+                }
             }
 
             ApplyHarnessStatus();
@@ -274,16 +273,47 @@ public sealed class MainForm : Form
     /** Tray action: report the harness version and offer to install a newer one. */
     private async Task OnCheckHarnessAsync()
     {
-        var installed = Tools.Discover().DshVersion;
-        var info = await HarnessUpdate.QueryAsync(installed).ConfigureAwait(true);
+        var tools = Tools.Discover();
+        var info = await HarnessUpdate.QueryAsync(tools.DshVersion).ConfigureAwait(true);
         _harnessVersions = info;
 
         if (info == null)
         {
             MessageBox.Show(this,
                 "Could not reach the npm registry to check for a harness update.\n\n"
-                + $"Installed: {installed ?? "unknown"}",
+                + $"Installed: {tools.DshVersion ?? "not installed"}",
                 "Harness update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Nothing usable is installed: offer to install (or repair) rather than
+        // talking about versions that are not there.
+        if (!info.InstalledKnown)
+        {
+            var problem = tools.DshBroken
+                ? "The installed @deepseek-ai/dsh package is incomplete, so it cannot run.\n\n"
+                : "@deepseek-ai/dsh is not installed.\n\n";
+            var repair = MessageBox.Show(this,
+                problem + $"Install {info.Available ?? "the newest release"} now?",
+                "Harness update", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (repair != DialogResult.Yes) return;
+
+            Log.Info("installing the missing harness CLI at the user's request");
+            var fix = await Task.Run(() => Updater.Repair(tools)).ConfigureAwait(true);
+            if (!fix.Usable)
+            {
+                MessageBox.Show(this,
+                    "The harness could not be installed.\n\n" + (fix.Error ?? $"exit code {fix.ExitCode}")
+                    + $"\n\nLogs: {AppPaths.LogsDir}",
+                    "Harness update", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            await CheckHarnessAsync().ConfigureAwait(true);
+            var restartNow = MessageBox.Show(this,
+                "DeepSeek Harness is installed.\n\nRestart now to use it?",
+                "Harness update", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (restartNow == DialogResult.Yes) RestartApp();
             return;
         }
 
@@ -302,7 +332,6 @@ public sealed class MainForm : Form
             "Harness update", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (answer != DialogResult.Yes) return;
 
-        var tools = Tools.Discover();
         var version = info.Available;
         Log.Info($"installing harness {version} at the user's request");
 
