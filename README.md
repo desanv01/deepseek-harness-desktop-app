@@ -41,6 +41,8 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 ## What it does
 
 - **No-terminal launch** — starts `dsh web --no-open` as a hidden child process. No console window is ever shown.
+- **Fast launch** — the CLI is probed cheaply (0.2 s) instead of being verified with a full `dsh web --help` (7–8 s) before every boot; the deep check runs only as diagnosis when something fails. The embedded browser is warmed while the server boots, the two update checks wait for the first paint, and — with keep-alive on — a later launch attaches to the running server in seconds instead of booting.
+- **The harness keeps running** — by default the server outlives the window, so closing and reopening the app is an attach rather than a boot. The tray's "Stop server and exit" and `--stop` end it, and `--no-keep-alive` restores "closing the window stops the server".
 - **Remembers your project** — the chosen folder, home, and port are saved to `settings.json`. Later launches open the same project with no flags; the first launch shows a picker with your recent projects.
 - **Opens your project** — `--project <dir>` becomes the server's working directory, which is what scopes the harness workspace. The window title shows the project name.
 - **OS-assigned port** — starts with `--port 0` and reads the real address from the ready line the harness prints, so port conflicts cannot happen.
@@ -53,7 +55,9 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Finds the harness wherever npm put it** — the CLI is located the way a shell locates it: the `dsh` shim on `PATH` is read for the entry point it runs, the package's own `package.json` `bin` is honoured, and a global prefix outside `PATH` is found through `npm prefix -g`. A custom npm prefix, a pnpm-style store, or a package layout change therefore still resolves.
 - **Repairs a broken harness install** — an interrupted `npm install -g` leaves the package directory behind without the files the CLI needs. The app says exactly that instead of claiming the harness is not installed, and offers to install it; `--update` does the same without asking, and `--repair-harness` does it from a script. Before npm touches a working install, the app moves it aside and puts it back if the result does not validate, so a failed update never costs you a working harness.
 - **Update aware** — on launch it also asks GitHub for a newer build of this app, caches the answer for six hours, and announces one when it exists: a tray notification, a line in the tray menu, a pill inside the harness page, and the version in the window title. Detection reads release metadata only.
-- **In-app updates** — a "Check for updates" window covers both tracks. The desktop-app tab downloads the published build, checks it against the release's `SHA256SUMS`, and installs it on demand: the server stops, a helper swaps the executable once the app has exited, and the app comes back on the new build. A build that does not start is rolled back automatically. The harness tab installs a newer `@deepseek-ai/dsh` from npm.
+- **In-app updates** — the Updates section lives inside the harness UI, where this harness expects extensions to live. A bundled DSH plugin registers it into the sidebar (beside Settings) and into Settings itself, and talks to the app through a versioned page bridge (`window.__dshDesktop`). The app keeps what a page must never hold: the download, the checksum verification, the staged swap, and the restart. The native updates window remains as a fallback and as a shortcut from the tray.
+- **Plugin management** — the same section installs, switches and removes harness plugins: ours and third-party ones, by npm name, git spec, or local folder. pnpm is carried by the build (extracted from the executable, or fetched with npm when the build shipped without it), so `dsh plugin add` works on a machine that has never installed pnpm. Enable/disable goes through the profile's patch layer, so a plugin can be taken out of the tree without uninstalling it.
+- **Safe mode** — a plugin the harness cannot load aborts the whole profile. The app reads the loader's own message, disables the offending plugin, and boots again once, so a bad plugin costs a notification instead of a window that never opens. `--safe-mode` boots with the base bundles only.
 - **Staged, never in place** — the running executable is never overwritten while it runs. The download is verified before the swap, the previous build is kept as `<exe>.old` until the new one has stayed up, and a checksum mismatch discards the download outright.
 - **Bounded logs** — `desktop.log` rotates at 4 MB and old server logs are pruned at startup.
 - **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.
@@ -176,6 +180,15 @@ DeepSeekHarness.exe --self-test                  environment report and exit
 DeepSeekHarness.exe --check-harness              report installed vs published harness versions
 DeepSeekHarness.exe --check-updates              report app + harness update state (exit 10 = update available)
 DeepSeekHarness.exe --updates                    open the updates window on launch
+DeepSeekHarness.exe --keep-alive                 let the harness outlive the window (default)
+DeepSeekHarness.exe --no-keep-alive              closing the window stops the server
+DeepSeekHarness.exe --safe-mode                  boot with the base bundles only
+DeepSeekHarness.exe --install-plugin             install the bundled updates plugin into the home, then exit
+DeepSeekHarness.exe --plugin-list                list the plugins this home runs
+DeepSeekHarness.exe --add-plugin <spec>          install a plugin (npm name, git spec, or local folder)
+DeepSeekHarness.exe --remove-plugin <name>       remove one
+DeepSeekHarness.exe --enable-plugin <name>       switch one on (and --disable-plugin for off)
+DeepSeekHarness.exe --bridge-selftest            exercise the page bridge protocol without a browser
 DeepSeekHarness.exe --install-update             download + verify + stage the newest release, then exit
 DeepSeekHarness.exe --install-update --apply-now  ... and hand over to the update helper (restarts the app)
 DeepSeekHarness.exe --no-update-check            launch without asking the release feed anything
@@ -189,6 +202,15 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--project <dir>` | remembered project, else picker | Working directory of the managed server: the workspace the window opens |
 | `--dsh-home <dir>` | remembered home, else `%LOCALAPPDATA%\DeepSeekHarness\home` | `DSH_HOME` for the managed server; one server owns one home |
 | `--port <n>` | `0` (OS picks a free port) | Pin the listen port; the real port is read from the ready line either way |
+| `--keep-alive` | on | The managed server outlives the window; the next launch attaches to it |
+| `--no-keep-alive` | off | Closing the window stops the server, as it did before keep-alive |
+| `--safe-mode` | off | Boot with the base bundles only, leaving added plugins aside |
+| `--install-plugin` | off | Install the bundled updates plugin into the selected home and exit |
+| `--plugin-list` | off | Print the bundles this home runs, with version and state |
+| `--add-plugin <spec>` | — | `dsh plugin add` through the app: registry name, git spec, or local folder |
+| `--remove-plugin <name>` | — | Remove a plugin from the profile |
+| `--enable-plugin <name>` / `--disable-plugin <name>` | — | Switch one through the profile's patch layer, keeping it installed |
+| `--bridge-selftest` | off | Check the page bridge protocol (parsing, dispatch, replies, events) and exit |
 | `--address <host>` | `127.0.0.1` | Bind address for the managed server |
 | `--ready-timeout <sec>` | `240` | How long to wait for the server's ready line |
 | `--update` | off | Run `npm install -g @deepseek-ai/dsh@latest` before boot; also installs or repairs a missing, half-installed CLI |
@@ -258,7 +280,15 @@ src/DeepSeekHarness/
 ├── UpdatesForm.cs         # the updates window: desktop app, harness, about
 ├── Updater.cs             # opt-in serialized npm update
 ├── AppPaths.cs            # %LOCALAPPDATA% layout, home keys, log pruning
-├── MainForm.cs            # WebView2 window, theme measurement, tray handoff
+├── MainForm.cs            # WebView2 window, theme measurement, tray handoff, bridge host
+├── DesktopBridge.cs       # window.__dshDesktop: the versioned page bridge and its protocol
+├── DesktopPlugin.cs       # the bundled harness plugin: extract, install, keep current
+├── DesktopPluginCli.cs    # --install-plugin
+├── HarnessProfile.cs      # the profile a home runs: bundle stack and patch layer
+├── PluginManager.cs       # add/remove/enable/disable, with the pnpm runtime it carries
+├── PluginCli.cs           # --plugin-list / --add-plugin / --remove-plugin / --enable-plugin
+├── SafeMode.cs            # recovery from a plugin the harness cannot load
+├── MarkdownView.cs        # release notes rendered into the updates window
 ├── TrayIcon.cs            # tray icon and its menu
 ├── SplashForm.cs          # startup splash with live status
 ├── Theme.cs               # shared palette and embedded artwork
@@ -267,6 +297,9 @@ src/DeepSeekHarness/
 ├── Log.cs                 # rotating, never-throwing file + console logger
 └── Ui.cs                  # message-box error surface
 assets/                    # official DeepSeek artwork (regenerated by tools\update-icons.ps1)
+assets/pnpm/               # pnpm runtime, fetched by build.ps1 and embedded (git-ignored)
+plugins/                   # the harness plugins this app ships
+  dsh-plugin-desktop-updates/   # the Updates UI: sidebar entry + Settings section
 screenshots/               # README images
 build.ps1                  # dev / portable-folder / single-file builds
 build_portable.ps1         # one self-contained exe + zip
@@ -299,7 +332,13 @@ Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek
 - update check against the live repository — the redirect endpoint reports the newest tag even while the anonymous API limit is exhausted, and `--check-updates` exits `10` when a newer build exists and `0` when the running one is newest;
 - update install against a local release fixture — download, `SHA256SUMS` verification, staged apply, restart; a tampered checksum is refused and the download discarded; a build that exits immediately is rolled back to the previous one;
 - the injected update pill — exercised against a fake DOM (one element, posts on click, hides, survives a missing `document.body`);
-- harness CLI handling — `tools\smoke-test.ps1` covers discovery through a shim and through `package.json`, a half-installed package reported as incomplete, `--repair-harness` installing a missing CLI, a failed install restoring the previous one, and a successful install replacing it (16 assertions, no network needed).
+- harness CLI handling — `tools\smoke-test.ps1` covers discovery through a shim and through `package.json`, a half-installed package reported as incomplete, `--repair-harness` installing a missing CLI, a failed install restoring the previous one, and a successful install replacing it;
+- the plugin pipeline — the same suite installs the bundled plugin into a fresh home, adds a local plugin, switches it off and on through the patch layer, refuses to switch off a base bundle, removes it, and boots a home whose plugin throws on import, recovering with that plugin disabled (38 assertions, no network);
+- the page bridge — `--bridge-selftest`, 18 checks over parsing, dispatch, replies, parameter decoding and event shapes, run where WebView2 cannot start;
+- the updates section — served bundle verified to register both slots, live app confirmed to install the plugin at boot and to expose it in `window.__DSH_BOOT__`;
+- startup — measured on one machine: 25.5 s to a ready window before, 14.6 s after (the pre-flight phase alone went from 10 s to 1 s);
+- keep-alive — the server survives the window, the next launch adopts it (same pid), and `--stop` ends it;
+- `--stop`, invalid `--port`, unknown flag, missing `--update-feed` file — correct exit codes (`2`), `--check-updates` exits `10`/`0` as documented.
 
 Known limitations:
 

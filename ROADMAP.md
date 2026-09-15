@@ -5,10 +5,20 @@ The app is feature-complete for its core promise: launch, project-scoped window,
 | Item | State | Notes |
 | --- | --- | --- |
 | 1. GitHub Actions | **done** | `ci.yml` builds and smoke-tests on every push; `release.yml` publishes a tagged build with `SHA256SUMS` |
-| 2. Unit tests | **partly done** | `tools/smoke-test.ps1` covers harness-CLI discovery, repair and install safety behaviourally in CI; the pure-logic unit tests below are still open |
+| 2. Unit tests | **partly done** | `tools/smoke-test.ps1` covers harness-CLI discovery, repair, install safety, the plugin pipeline and safe-mode recovery behaviourally in CI (38 assertions); the pure-logic unit tests below are still open |
 | 3. Signed self-update | **partly done** | Detect, download, checksum-verify, stage, apply, roll back, and notify all ship; Authenticode signing and `WinVerifyTrust` do not |
 
 What follows is the original plan, kept for the parts that are still open.
+
+## Shipped after the first release (2026-09-15, later the same day)
+
+| Area | What landed |
+| --- | --- |
+| Startup | The per-launch `dsh web --help` verification (7-8 s) replaced by a 0.2 s probe, with the deep check kept as diagnosis; WebView2 warmed in parallel with the server boot; the two update checks moved after first paint. Measured 25.5 s -> 14.6 s to a ready window |
+| UI as plugins | The Updates UI moved out of a native window into a DSH plugin (`plugins/dsh-plugin-desktop-updates`): a sidebar entry beside Settings and a Settings section, driven by a versioned page bridge (`window.__dshDesktop`) over WebView2 messages |
+| Plugin management | Install, remove, enable and disable plugins - ours and third-party - from the app or from flags, with the pnpm runtime carried by the build (12.4 MB, two files) and enable/disable going through the profile patch layer |
+| Safe mode | A plugin the loader cannot apply is detected from its own message, disabled, and the boot retried once; `--safe-mode` boots with the base bundles only |
+| Lifetime | The harness keeps running after the window closes; the next launch adopts it (measured: attach instead of boot), the tray and `--stop` end it, `--no-keep-alive` restores the old contract |
 
 ---
 

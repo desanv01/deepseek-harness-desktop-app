@@ -99,7 +99,13 @@ public static class ServerManager
         catch (Exception ex) { Log.Warn("could not create the DSH_HOME directory: " + ex.Message); }
 
         var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var job = JobObject.Create();
+        // Kill-on-close is the shutdown guarantee, so keep-alive mode turns it
+        // off deliberately: the server must outlive this process.
+        var job = JobObject.Create(killOnClose: !o.KeepServerRunning);
+        if (!o.KeepServerRunning)
+        {
+            Log.Info("keep-alive is on: the harness will keep running after this window closes");
+        }
         var args = new[] { dsh, "web", "--no-open", "--host", o.Address, "--port", o.Port.ToString() };
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {

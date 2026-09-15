@@ -83,6 +83,12 @@ public sealed class Options
     /** True when the feed or the check policy was named on the command line. */
     public bool UpdateCheckSpecified { get; private set; }
 
+    /** Whether the managed server outlives the window (settings can turn it off). */
+    public bool KeepServerRunning { get; private set; } = true;
+
+    /** True when the flag was named on the command line. */
+    public bool KeepServerSpecified { get; private set; }
+
     /** Whether a launch asks the release feed for a newer build (settings can turn it off). */
     public bool CheckForUpdatesOnLaunch { get; private set; } = true;
 
@@ -217,6 +223,17 @@ public sealed class Options
                 case "-disable-plugin":
                     o.DisablePlugin = ReadValue(args, ref i, "disable-plugin");
                     break;
+                case "--keep-alive":
+                case "-keep-alive":
+                    o.KeepServerRunning = true;
+                    o.KeepServerSpecified = true;
+                    break;
+                case "--no-keep-alive":
+                case "-no-keep-alive":
+                case "--stop-server-on-exit":
+                    o.KeepServerRunning = false;
+                    o.KeepServerSpecified = true;
+                    break;
                 case "--no-update-check":
                 case "-no-update-check":
                     o.NoUpdateCheck = true;
@@ -254,6 +271,7 @@ public sealed class Options
         if (!PortSpecified) Port = settings.Port;
         if (!UpdateSpecified) Update = settings.Update;
         CheckForUpdatesOnLaunch = settings.CheckForUpdates;
+        if (!KeepServerSpecified) KeepServerRunning = settings.KeepServerRunning;
         if (!UpdateCheckSpecified && !string.IsNullOrWhiteSpace(settings.UpdateFeedUrl))
         {
             UpdateFeedUrl = settings.UpdateFeedUrl;

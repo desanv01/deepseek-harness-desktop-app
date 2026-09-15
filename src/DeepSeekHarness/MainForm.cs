@@ -185,6 +185,20 @@ public sealed class MainForm : Form, IBridgeHost
      * ordinary taskbar minimize - so it is created up front and stays available
      * for the whole window lifetime.
      */
+    /** Tray action: quit and end the harness too, whatever keep-alive says. */
+    private void ExitAndStopServer()
+    {
+        StopServerRequested = true;
+        Log.Info("the tray asked to stop the server and exit");
+        Close();
+    }
+
+    /** Set by the tray's "Stop server and exit": quit and end the server too. */
+    public bool StopServerRequested { get; private set; }
+
+    /** Whether the harness is meant to outlive this window (for the tray wording). */
+    public bool KeepServerOnExit { get; init; } = true;
+
     private void OnShown(object? sender, EventArgs e)
     {
         EnsureTray();
@@ -275,9 +289,10 @@ public sealed class MainForm : Form, IBridgeHost
                 _projectDir,
                 onOpen: RestoreFromTray,
                 onHide: HideToTray,
-                onExit: Close,
+                onExit: ExitAndStopServer,
                 onCheckHarness: () => _ = OnCheckHarnessAsync(),
-                onCheckUpdates: () => _ = OnCheckUpdatesAsync(),                harnessStatus: _harnessStatus,
+                onCheckUpdates: () => _ = OnCheckUpdatesAsync(),
+                harnessStatus: _harnessStatus,
                 appStatus: _appUpdateStatus);
             _tray.SetHarnessStatus(_harnessStatus);
             _tray.SetAppStatus(_appUpdateStatus);

@@ -25,8 +25,13 @@ public sealed class JobObject : IDisposable
 
     public bool IsValid => _handle != IntPtr.Zero;
 
-    /** Creates a kill-on-close job; null when the OS refuses one. */
-    public static JobObject? Create()
+    /**
+     * Creates a job for the managed server. killOnClose is the shutdown
+     * guarantee: the OS kills the server when this process dies. Keep-alive mode
+     * turns it off on purpose, so the harness survives the window - then the
+     * lease, the next launch's adoption, and `--stop` are what clean up.
+     */
+    public static JobObject? Create(bool killOnClose = true)
     {
         var handle = CreateJobObjectW(IntPtr.Zero, null);
         if (handle == IntPtr.Zero)
@@ -39,7 +44,7 @@ public sealed class JobObject : IDisposable
         {
             BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
             {
-                LimitFlags = JobObjectLimitKillOnJobClose,
+                LimitFlags = killOnClose ? JobObjectLimitKillOnJobClose : 0,
             },
         };
         var size = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();

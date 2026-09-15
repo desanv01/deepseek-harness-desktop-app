@@ -31,6 +31,9 @@ public static class Orchestrator
         /** What safe mode had to disable, when it had to. */
         public string? Recovered;
 
+        /** True when this launch attached to a server that was already running. */
+        public bool Reused;
+
         public void Dispose()
         {
             Guard?.Dispose();
@@ -168,21 +171,34 @@ public static class Orchestrator
         var project = o.ProjectDir ?? Environment.CurrentDirectory;
         Action? onFocus = null;
         using var signal = FocusSignal.Create(o.ResolveHome(), () => onFocus?.Invoke());
+        var stopRequested = !o.KeepServerRunning;
 
         try
         {
-            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.ResolveHome(), o.UpdatePolicy, webView, outcome.Recovered);
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.ResolveHome(), o.UpdatePolicy, webView, outcome.Recovered)
+            {
+                KeepServerOnExit = o.KeepServerRunning,
+            };
             if (o.OpenUpdates) form.OpenUpdatesWhenShown();
             onFocus = form.FocusFromSignal;
             signal?.Start();
             Application.Run(form);
+            stopRequested = stopRequested || form.StopServerRequested;
         }
         finally
         {
             if (outcome.Mode == Mode.Owned && outcome.Lease != null)
             {
-                Log.Info("window closed; stopping the managed server");
-                ServerManager.Stop(outcome.Lease);
+                if (stopRequested)
+                {
+                    Log.Info("window closed; stopping the managed server");
+                    ServerManager.Stop(outcome.Lease);
+                }
+                else
+                {
+                    Log.Info($"window closed; the harness keeps running at {outcome.Lease.Address}:{outcome.Lease.Port} "
+                             + "(the next launch attaches to it, and --stop ends it)");
+                }
             }
         }
         Log.Info("=== exit ===");
@@ -212,6 +228,27 @@ public static class Orchestrator
             // The previous owner may have crashed after writing a lease; its
             // job object already killed the child, so the record is stale.
             ServerManager.RemoveStaleLease(home);
+
+            /*
+             * A live lease means a server for this home is already running -
+             * normally because keep-alive left it behind when the last window
+             * closed. Adopt it instead of starting a second one: that is what
+             * makes the next launch a two-second attach rather than a boot.
+             */
+            var existing = ServerManager.TryAdoptHome(o);
+            if (existing != null)
+            {
+                Say($"Attaching to the running DeepSeek Harness server on {existing.Address}:{existing.Port} ...");
+                Log.Info($"adopted the live server pid {existing.Pid} for this home");
+                return new Outcome
+                {
+                    Mode = Mode.Owned,
+                    Lease = existing,
+                    Guard = guard,
+                    PageUrl = existing.Url,
+                    Reused = true,
+                };
+            }
 
             var tools = Tools.Discover();
             var toolFailure = PrepareTools(o, ref tools, status, ct, guard);

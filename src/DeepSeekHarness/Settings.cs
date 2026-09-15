@@ -22,6 +22,13 @@ public sealed class AppSettings
     /** Whether the npm update runs on launch. */
     public bool Update { get; set; }
 
+    /**
+     * Whether the harness keeps running after the window closes. On (the
+     * default) makes the next launch an attach instead of a boot; off restores
+     * "closing the window stops the server".
+     */
+    public bool KeepServerRunning { get; set; } = true;
+
     /** Whether a launch asks GitHub for a newer build of this app (default: yes). */
     public bool CheckForUpdates { get; set; } = true;
 
