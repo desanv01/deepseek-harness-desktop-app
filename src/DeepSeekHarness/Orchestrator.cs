@@ -165,7 +165,7 @@ public static class Orchestrator
 
         try
         {
-            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.UpdatePolicy, webView);
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.ResolveHome(), o.UpdatePolicy, webView);
             if (o.OpenUpdates) form.OpenUpdatesWhenShown();
             onFocus = form.FocusFromSignal;
             signal?.Start();
@@ -210,6 +210,20 @@ public static class Orchestrator
             var tools = Tools.Discover();
             var toolFailure = PrepareTools(o, ref tools, status, ct, guard);
             if (toolFailure != null) return toolFailure;
+
+            // The app's own UI lives in a harness plugin, so it must be in the
+            // profile before the server composes it. This needs no package
+            // manager: the plugin ships inside the executable.
+            var pluginError = DesktopPlugin.Ensure(home, tools, out var plugin);
+            if (pluginError != null)
+            {
+                Log.Warn($"the desktop plugin could not be installed ({pluginError}); "
+                         + "the native updates window still works");
+            }
+            else
+            {
+                Log.Info($"desktop plugin {plugin.Describe()}");
+            }
 
             Say($"Starting the DeepSeek Harness server for {o.ProjectDir} ...");
             lease = ServerManager.Start(tools, o, status, ct);

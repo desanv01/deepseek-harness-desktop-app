@@ -14,7 +14,7 @@ namespace DShNative;
 public sealed record UpdatePolicy(bool CheckOnLaunch, string? FeedUrl);
 
 /** WebView2 window for the harness UI; icon and title bar follow the theme. */
-public sealed class MainForm : Form
+public sealed class MainForm : Form, IBridgeHost
 {
     // Page background via JS (body first, then <html>).
     private const string BgScript =
@@ -74,6 +74,7 @@ public sealed class MainForm : Form
     private readonly string _url;
     private readonly string _userDataDir;
     private readonly string _projectDir;
+    private readonly string _home;
     private readonly UpdatePolicy _policy;
     private readonly string _baseTitle;
     private readonly Label _status;
@@ -92,6 +93,7 @@ public sealed class MainForm : Form
     private bool _openUpdatesOnShown;
     private readonly Task<CoreWebView2Environment?>? _warmEnvironment;
     private bool _checksStarted;
+    private StagedUpdate? _staged;
 
     /**
      * Starts the embedded browser's process tree before the window exists, so
@@ -125,14 +127,17 @@ public sealed class MainForm : Form
         string url,
         string userDataDir,
         string projectDir,
+        string harnessHome,
         UpdatePolicy? policy = null,
         Task<CoreWebView2Environment?>? warmEnvironment = null)
     {
         _url = url;
         _userDataDir = userDataDir;
         _projectDir = projectDir;
+        _home = harnessHome;
         _policy = policy ?? new UpdatePolicy(CheckOnLaunch: true, FeedUrl: null);
         _warmEnvironment = warmEnvironment;
+        _staged = UpdateInstaller.ReadPending();
 
         var projectName = "";
         try
@@ -209,7 +214,7 @@ public sealed class MainForm : Form
         {
             // Let the page finish its own first frames before adding work.
             await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(true);
-            _ = CheckHarnessAsync();
+            _ = RefreshHarnessStatusAsync();
             _ = CheckAppUpdateAsync(force: false);
         }
         catch (Exception ex)
@@ -284,7 +289,7 @@ public sealed class MainForm : Form
      * Reads the npm dist-tags once per window and records the result for the
      * tray. Read-only: nothing is installed here.
      */
-    private async Task CheckHarnessAsync()
+    private async Task RefreshHarnessStatusAsync()
     {
         if (_harnessCheckRunning) return;
         _harnessCheckRunning = true;
@@ -374,7 +379,7 @@ public sealed class MainForm : Form
                 return;
             }
 
-            await CheckHarnessAsync().ConfigureAwait(true);
+            await RefreshHarnessStatusAsync().ConfigureAwait(true);
             var restartNow = MessageBox.Show(this,
                 "DeepSeek Harness is installed.\n\nRestart now to use it?",
                 "Harness update", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
@@ -632,6 +637,7 @@ public sealed class MainForm : Form
                     web.DefaultBackgroundColor = CurrentBackground();
                     web.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
                     web.CoreWebView2.WebMessageReceived += OnWebMessage;
+                    _ = web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(DesktopBridge.Script(AppInfo.Version));
                     _ = web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(BadgeScript);
                     web.CoreWebView2.Navigate(_url);
                 }
@@ -676,12 +682,23 @@ public sealed class MainForm : Form
         }
     }
 
-    /** The update pill inside the page opens the updates window. */
+    /**
+     * Page messages: the updates plugin (and the app's own badge) talk to the
+     * app through the bridge, which is the only channel a page gets.
+     */
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
         {
-            if (e.WebMessageAsJson?.Contains("dsh-desktop-updates", StringComparison.Ordinal) == true)
+            var json = e.WebMessageAsJson;
+            var request = DesktopBridge.Parse(json);
+            if (request != null)
+            {
+                _ = HandleBridgeRequestAsync(request);
+                return;
+            }
+
+            if (json?.Contains("dsh-desktop-updates", StringComparison.Ordinal) == true)
             {
                 ShowUpdates();
             }
@@ -691,6 +708,212 @@ public sealed class MainForm : Form
             Log.Warn("could not read a page message: " + ex.Message);
         }
     }
+
+    /** Runs one bridge request and posts the reply back to the page. */
+    private async Task HandleBridgeRequestAsync(DesktopBridge.Request request)
+    {
+        var progress = new Progress<UpdateProgress>(update => PostToPage(DesktopBridge.ProgressEvent(update)));
+        string reply;
+        try
+        {
+            reply = await DesktopBridge.DispatchAsync(request, this, progress, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            reply = DesktopBridge.Reply(request.Id, null, ex.Message);
+        }
+        PostToPage(reply);
+        PushBridgeState();
+    }
+
+    /** Sends one JSON message to the page; silently does nothing without a page. */
+    private void PostToPage(string json)
+    {
+        try
+        {
+            var core = _web?.CoreWebView2;
+            core?.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not post to the page: " + ex.Message);
+        }
+    }
+
+    /** Pushes the current state so an open Updates section stays live. */
+    private void PushBridgeState()
+    {
+        try
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(PushBridgeState));
+                return;
+            }
+            PostToPage(DesktopBridge.StateEvent(BuildState()));
+        }
+        catch
+        {
+            // the window is closing; nobody is listening any more
+        }
+    }
+
+    // ---- IBridgeHost ---------------------------------------------------------
+
+    /** The state snapshot the page renders from. */
+    public object BuildState()
+    {
+        var staged = _staged;
+        var plugins = new List<PluginEntry>();
+        try
+        {
+            plugins = HarnessProfile.ReadPlugins(_home);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not read the plugin list: " + ex.Message);
+        }
+
+        return new
+        {
+            app = new
+            {
+                version = AppInfo.Version,
+                latest = _appUpdate?.Latest?.Version,
+                available = _appUpdate?.UpdateAvailable ?? false,
+                status = _appUpdateStatus,
+                notes = _appUpdate?.Latest?.Notes,
+                checkedAt = _appUpdate?.CheckedAtUtc.ToString("o"),
+                error = _appUpdate?.Error,
+            },
+            harness = new
+            {
+                installed = _harnessVersions?.Installed,
+                latest = _harnessVersions?.Latest,
+                alpha = _harnessVersions?.Alpha,
+                available = _harnessVersions?.Available,
+                status = _harnessStatus,
+            },
+            staged = staged == null ? null : new { version = staged.Version, ready = true },
+            policy = new { checkOnLaunch = _policy.CheckOnLaunch },
+            plugins = new
+            {
+                canManage = HarnessProfile.CanManagePlugins,
+                entries = plugins.Select(p => new
+                {
+                    name = p.Name,
+                    version = p.Version,
+                    enabled = p.Enabled,
+                    builtIn = p.BuiltIn,
+                }).ToArray(),
+            },
+        };
+    }
+
+    public async Task<object> CheckAsync(CancellationToken ct)
+    {
+        await CheckAppUpdateAsync(force: true).ConfigureAwait(true);
+        await RefreshHarnessStatusAsync().ConfigureAwait(true);
+        return BuildState();
+    }
+
+    public async Task<object> InstallAsync(IProgress<UpdateProgress> progress, CancellationToken ct)
+    {
+        var release = _appUpdate?.Latest;
+        if (release == null) return new { ok = false, error = "no release to install yet; check first" };
+
+        var (staged, error) = await UpdateInstaller.StageAsync(release, progress, ct).ConfigureAwait(true);
+        if (staged == null) return new { ok = false, error = error ?? "the download failed" };
+
+        _staged = staged;
+        _appUpdateStatus = $"{staged.Version} is downloaded and verified";
+        ApplyUpdateState();
+        return new { ok = true, version = staged.Version, verified = staged.HasChecksum, bytes = staged.Bytes };
+    }
+
+    public Task<object> ApplyAsync()
+    {
+        var staged = _staged;
+        if (staged == null) return Task.FromResult<object>(new { ok = false, error = "nothing is staged" });
+
+        var error = UpdateInstaller.BeginApply(staged, relaunch: true);
+        if (error != null) return Task.FromResult<object>(new { ok = false, error });
+
+        // The helper waits for this process to exit; close so it can swap.
+        BeginInvoke(new Action(Close));
+        return Task.FromResult<object>(new { ok = true, restarting = true });
+    }
+
+    public async Task<object> CheckHarnessAsync(CancellationToken ct)
+    {
+        await RefreshHarnessStatusAsync().ConfigureAwait(true);
+        return BuildState();
+    }
+
+    public Task<object> InstallHarnessAsync(CancellationToken ct)
+    {
+        var version = _harnessVersions?.Available;
+        if (version == null) return Task.FromResult<object>(new { ok = false, error = "the harness is already current" });
+
+        return Task.Run<object>(() =>
+        {
+            var tools = Tools.Discover();
+            var result = Updater.Install(tools, version);
+            if (!result.Usable)
+            {
+                return new { ok = false, error = result.Error ?? $"exit code {result.ExitCode}" };
+            }
+            return new { ok = true, version, restartRequired = true };
+        }, ct);
+    }
+
+    public Task<object> SetPolicyAsync(bool checkOnLaunch)
+    {
+        SaveUpdatePolicy(checkOnLaunch);
+        return Task.FromResult<object>(new { ok = true, checkOnLaunch });
+    }
+
+    public Task<object> SetPluginEnabledAsync(string pluginName, bool enabled)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pluginName))
+                return Task.FromResult<object>(new { ok = false, error = "no plugin was named" });
+
+            var moduleDir = Path.Combine(HarnessProfile.ModulesDir(_home), pluginName);
+            var rowIds = HarnessProfile.ReadPatchRowIds(moduleDir);
+            if (rowIds.Count == 0)
+            {
+                return Task.FromResult<object>(new
+                {
+                    ok = false,
+                    error = $"{pluginName} mounts no row of its own, so it cannot be switched off here",
+                });
+            }
+
+            foreach (var rowId in rowIds)
+            {
+                var error = HarnessProfile.SetRowDisabled(_home, rowId, !enabled);
+                if (error != null) return Task.FromResult<object>(new { ok = false, error });
+            }
+
+            Log.Info($"{pluginName} {(enabled ? "enabled" : "disabled")} in profile {HarnessProfile.Name}");
+            return Task.FromResult<object>(new
+            {
+                ok = true,
+                restartRequired = true,
+                note = "Restart the app to apply the change.",
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult<object>(new { ok = false, error = ex.Message });
+        }
+    }
+
+    public void OpenNativeWindow() => ShowUpdates();
 
     /** Shows or hides the in-page update pill to match the current state. */
     private void UpdateBadge()

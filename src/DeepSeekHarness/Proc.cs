@@ -21,9 +21,20 @@ public sealed record SpawnOptions(
 public static class Proc
 {
     /** Runs to completion; exit code, -1 never started, -997 setup failed, -998 cancelled, -999 timed out (tree killed). */
-    public static int Run(string exePath, string[] args, string? outFile, string? errFile, int timeoutMs, CancellationToken ct = default)
+    public static int Run(
+        string exePath,
+        string[] args,
+        string? outFile,
+        string? errFile,
+        int timeoutMs,
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var psi = StartInfo(exePath, args, outFile != null, errFile != null);
+        if (environment != null)
+        {
+            foreach (var entry in environment) psi.Environment[entry.Key] = entry.Value;
+        }
 
         using var p = new Process { StartInfo = psi };
         try

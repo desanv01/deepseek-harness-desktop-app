@@ -57,6 +57,9 @@ public static class AppPaths
     /** Staged desktop-app updates: one folder per release tag. */
     public static string UpdatesDir => Path.Combine(Root, "updates");
 
+    /** The desktop app's own DSH plugins, extracted from the executable. */
+    public static string PluginsDir => Path.Combine(Root, "plugins");
+
     /** Cached answer of the last GitHub release check. */
     public static string UpdateCheckCacheFile => Path.Combine(Root, "update-check.json");
 

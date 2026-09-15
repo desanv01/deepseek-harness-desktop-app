@@ -31,6 +31,15 @@
     <EmbeddedResource Include="assets\icon-dark.ico" LogicalName="DShNative.icon-dark.ico" />
     <!-- Splash loading visual (animated GIFs play automatically) -->
     <EmbeddedResource Include="..\..\assets\source\loading_splash_image.gif" LogicalName="DShNative.splash.gif" />
+    <!--
+      The updates plugin the app installs into the harness home it owns. It is
+      shipped inside the executable so a home can be provisioned with no package
+      manager and no network. Sources live in plugins\dsh-plugin-desktop-updates.
+    -->
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\client.js" LogicalName="DShNative.plugin.client.js" />
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\index.js" LogicalName="DShNative.plugin.index.js" />
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\package.json" LogicalName="DShNative.plugin.package.json" />
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\cordis.patch.yml" LogicalName="DShNative.plugin.cordis.patch.yml" />
   </ItemGroup>
 
 </Project>

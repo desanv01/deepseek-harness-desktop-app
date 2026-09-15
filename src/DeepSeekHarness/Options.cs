@@ -36,6 +36,12 @@ public sealed class Options
     /** --repair-harness: install or repair the global harness CLI, then exit. */
     public bool RepairHarness { get; private set; }
 
+    /** --install-plugin: install the bundled harness plugin into the home, then exit. */
+    public bool InstallPlugin { get; private set; }
+
+    /** --bridge-selftest: exercise the page bridge protocol without a browser. */
+    public bool BridgeSelfTest { get; private set; }
+
     /** --apply-now: with --install-update, hand over to the helper instead of stopping at staging. */
     public bool ApplyNow { get; private set; }
 
@@ -162,6 +168,14 @@ public sealed class Options
                 case "--repair-harness":
                 case "-repair-harness":
                     o.RepairHarness = true;
+                    break;
+                case "--install-plugin":
+                case "-install-plugin":
+                    o.InstallPlugin = true;
+                    break;
+                case "--bridge-selftest":
+                case "-bridge-selftest":
+                    o.BridgeSelfTest = true;
                     break;
                 case "--no-update-check":
                 case "-no-update-check":

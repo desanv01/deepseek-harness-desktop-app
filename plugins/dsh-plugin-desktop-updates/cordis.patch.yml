@@ -1,0 +1,13 @@
+# Bundle patch for dsh-plugin-desktop-updates.
+#
+# The desktop app installs this package into the harness home it owns and adds
+# it to `dsh.profile.bundles`; the profile boot merges this patch, which inserts
+# the plugin row. The browser half is picked up from the package's `dsh.client`
+# declaration.
+#
+# Installed by hand it is the same story, with the CLI doing the bookkeeping:
+#
+#   dsh plugin --profile web add <path to this folder>
+- insert:
+    - id: desktop-updates
+      name: 'dsh-plugin-desktop-updates'
