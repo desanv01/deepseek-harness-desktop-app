@@ -9,7 +9,12 @@ public static class Log
     private const long MaxFileBytes = 4L * 1024 * 1024;
 
     private static readonly object Sync = new();
-    private static readonly string FilePath = Path.Combine(AppPaths.LogsDir, "desktop.log");
+
+    /**
+     * Resolved per write, not once: the data root can move to %TEMP% when the
+     * chosen one turns out not to be writable, and logging must follow it.
+     */
+    private static string FilePath => Path.Combine(AppPaths.LogsDir, "desktop.log");
 
     public static void Info(string msg) => Write("INFO", msg);
     public static void Warn(string msg) => Write("WARN", msg);

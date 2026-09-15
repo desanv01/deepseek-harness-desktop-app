@@ -16,11 +16,16 @@ public static class AppPaths
      */
     public const string RootEnvVar = "DSH_DESKTOP_HOME";
 
-    public static string Root { get; } = ResolveRoot();
+    private static string? _root;
+
+    public static string Root => _root ??= ResolveRoot();
 
     /** True when the root came from the environment rather than %LOCALAPPDATA%. */
-    public static bool IsPortable { get; } = !string.IsNullOrWhiteSpace(
+    public static bool IsPortable { get; private set; } = !string.IsNullOrWhiteSpace(
         Environment.GetEnvironmentVariable(RootEnvVar));
+
+    /** True when the chosen root was unusable and %TEMP% had to be used instead. */
+    public static bool IsTemporary { get; private set; }
 
     private static string ResolveRoot()
     {
@@ -143,9 +148,39 @@ public static class AppPaths
         return Path.Combine(LogsDir, $"{prefix}-{stamp}-{Environment.ProcessId}-{Guid.NewGuid():N}{suffix}");
     }
 
+    /**
+     * Creates the data directories. The chosen root wins; when it cannot be
+     * written - the app unpacked into a read-only folder, or a DSH_DESKTOP_HOME
+     * pointing somewhere protected - the session continues under %TEMP% instead
+     * of refusing to start.
+     */
     public static void Ensure()
     {
-        Directory.CreateDirectory(Root);
-        Directory.CreateDirectory(LogsDir);
+        if (TryCreate(Root)) return;
+
+        var fallback = Path.Combine(Path.GetTempPath(), "DeepSeekHarness");
+        if (!TryCreate(fallback))
+        {
+            throw new IOException($"neither {Root} nor {fallback} could be created");
+        }
+
+        _root = fallback;
+        IsPortable = false;
+        IsTemporary = true;
+        Log.Warn($"the data root could not be written to; using {fallback} for this session");
+    }
+
+    private static bool TryCreate(string root)
+    {
+        try
+        {
+            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(Path.Combine(root, "logs"));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
