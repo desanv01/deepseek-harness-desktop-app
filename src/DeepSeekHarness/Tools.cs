@@ -384,9 +384,43 @@ public sealed class Tools
     }
 
     /**
+     * Fast liveness probe: runs the entry point with `--version`, which loads
+     * the CLI's own modules and nothing else. Measured at 0.2s against 7-8s for
+     * the `web --help` verification below, so the launch path uses this and
+     * keeps the deep check for diagnosis.
+     *
+     * It still catches the common breakage - a half-installed package fails to
+     * resolve lib/bin.js and exits non-zero immediately.
+     */
+    public static bool ProbeCli(Tools t, out string? error)
+    {
+        error = null;
+        var node = t.Node;
+        var dsh = t.DshCli;
+        if (string.IsNullOrEmpty(node) || string.IsNullOrEmpty(dsh))
+        {
+            error = "no usable CLI entry point was found";
+            return false;
+        }
+
+        var outFile = AppPaths.NewLogPath("dsh-probe", ".out.log");
+        var errFile = AppPaths.NewLogPath("dsh-probe", ".err.log");
+        var code = Proc.Run(node, new[] { dsh, "--version" }, outFile, errFile, 20_000);
+        if (code == 0) return true;
+
+        error = $"the CLI exited {code} when asked for its version";
+        Log.Warn($"{error}; probe logs: {errFile}");
+        return false;
+    }
+
+    /**
      * Exercises the CLI's web help path without binding a fixed port. This
      * catches a partially replaced global package that still has a dsh shim and
      * package.json but cannot load its runtime closure.
+     *
+     * It costs 7-8 seconds, so it is diagnosis (and --self-test), not the gate
+     * the launch path waits on: the server's own ready line is the real proof
+     * that the CLI works.
      */
     public static bool VerifyDsh(Tools t)
     {

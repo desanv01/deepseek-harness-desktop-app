@@ -90,13 +90,49 @@ public sealed class MainForm : Form
     private string? _announcedTag;
     private UpdatesForm? _updates;
     private bool _openUpdatesOnShown;
+    private readonly Task<CoreWebView2Environment?>? _warmEnvironment;
+    private bool _checksStarted;
 
-    public MainForm(string url, string userDataDir, string projectDir, UpdatePolicy? policy = null)
+    /**
+     * Starts the embedded browser's process tree before the window exists, so
+     * the seconds WebView2 spends starting up overlap the server boot instead of
+     * following it. The result is handed to the form, which navigates as soon as
+     * the harness is ready.
+     *
+     * Must be called from the UI thread: the environment is created in the
+     * process's single-threaded apartment, and starting it on a pool thread
+     * fails with RPC_E_CHANGED_MODE. The returned task does its work off-thread,
+     * so the caller is not blocked.
+     */
+    public static Task<CoreWebView2Environment?> WarmUp(string userDataDir)
+    {
+        try
+        {
+            return CoreWebView2Environment.CreateAsync(null, userDataDir)
+                .ContinueWith<CoreWebView2Environment?>(
+                    task => task.Status == TaskStatus.RanToCompletion ? task.Result : null,
+                    TaskScheduler.Default);
+        }
+        catch (Exception ex)
+        {
+            // The window reports a missing runtime with its own message.
+            Log.Warn("WebView2 warm-up could not start: " + ex.Message);
+            return Task.FromResult<CoreWebView2Environment?>(null);
+        }
+    }
+
+    public MainForm(
+        string url,
+        string userDataDir,
+        string projectDir,
+        UpdatePolicy? policy = null,
+        Task<CoreWebView2Environment?>? warmEnvironment = null)
     {
         _url = url;
         _userDataDir = userDataDir;
         _projectDir = projectDir;
         _policy = policy ?? new UpdatePolicy(CheckOnLaunch: true, FeedUrl: null);
+        _warmEnvironment = warmEnvironment;
 
         var projectName = "";
         try
@@ -144,12 +180,41 @@ public sealed class MainForm : Form
     private void OnShown(object? sender, EventArgs e)
     {
         EnsureTray();
-        _ = CheckHarnessAsync();
-        _ = CheckAppUpdateAsync(force: false);
+
+        // The update checks are cheap but not free, and they compete with the
+        // page for network and CPU, so they wait for the first paint. This is
+        // the fallback for a page that never paints.
+        _ = ChecksFallbackAsync();
+
         if (_openUpdatesOnShown)
         {
             _openUpdatesOnShown = false;
             BeginInvoke(new Action(ShowUpdates));
+        }
+    }
+
+    /** Runs the background checks if navigation never reports a paint. */
+    private async Task ChecksFallbackAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(30)).ConfigureAwait(true);
+        await StartBackgroundChecksAsync().ConfigureAwait(true);
+    }
+
+    /** Runs the background checks once, after the page has painted. */
+    private async Task StartBackgroundChecksAsync()
+    {
+        if (_checksStarted) return;
+        _checksStarted = true;
+        try
+        {
+            // Let the page finish its own first frames before adding work.
+            await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(true);
+            _ = CheckHarnessAsync();
+            _ = CheckAppUpdateAsync(force: false);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not start the background update checks: " + ex.Message);
         }
     }
 
@@ -544,7 +609,16 @@ public sealed class MainForm : Form
     {
         try
         {
-            var environment = await CoreWebView2Environment.CreateAsync(null, _userDataDir);
+            // The environment was created while the server booted; when the
+            // warm-up is missing or failed, create it here as before.
+            var environment = _warmEnvironment != null
+                ? await _warmEnvironment
+                : await CoreWebView2Environment.CreateAsync(null, _userDataDir);
+            if (environment == null)
+            {
+                environment = await CoreWebView2Environment.CreateAsync(null, _userDataDir);
+            }
+
             var web = new WebView2 { Dock = DockStyle.Fill };
             _web = web;
             Controls.Add(web);
@@ -593,6 +667,7 @@ public sealed class MainForm : Form
             }
             SetStatus(string.Empty); // hide overlay
             UpdateBadge();
+            _ = StartBackgroundChecksAsync();
             await MeasurePageBackgroundAsync();
         }
         catch (Exception ex)

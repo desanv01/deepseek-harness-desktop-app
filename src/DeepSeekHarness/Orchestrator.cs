@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
 
 namespace DShNative;
 
@@ -78,6 +79,11 @@ public static class Orchestrator
         using var cts = new CancellationTokenSource();
         using var splash = new SplashForm(o.TargetLabel, () => { try { cts.Cancel(); } catch { } });
 
+        // Start the embedded browser's process tree while the server boots
+        // instead of after: creating the environment is what costs the seconds,
+        // and it does not depend on the server at all.
+        var webView = MainForm.WarmUp(AppPaths.WebView2Data);
+
         splash.Show();
         var task = Task.Run(() => Boot(o, splash.SetStatus, cts.Token));
 
@@ -114,7 +120,7 @@ public static class Orchestrator
             }
             if (r.Mode is Mode.Cancelled or Mode.Focused) return 0;
 
-            RunWindow(o, r);
+            RunWindow(o, r, webView);
             return 0;
         }
     }
@@ -150,7 +156,7 @@ public static class Orchestrator
         return picked;
     }
 
-    private static void RunWindow(Options o, Outcome outcome)
+    private static void RunWindow(Options o, Outcome outcome, Task<CoreWebView2Environment?>? webView = null)
     {
         var pageUrl = outcome.PageUrl ?? o.Url;
         var project = o.ProjectDir ?? Environment.CurrentDirectory;
@@ -159,7 +165,7 @@ public static class Orchestrator
 
         try
         {
-            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.UpdatePolicy);
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.UpdatePolicy, webView);
             if (o.OpenUpdates) form.OpenUpdatesWhenShown();
             onFocus = form.FocusFromSignal;
             signal?.Start();
@@ -209,8 +215,18 @@ public static class Orchestrator
             lease = ServerManager.Start(tools, o, status, ct);
             if (lease == null)
             {
+                // The launch path does not run the deep CLI check, so this is
+                // where spending 7 seconds on it pays for itself: it separates
+                // "the harness failed" from "the installation is broken".
+                var cliLoads = Tools.VerifyDsh(tools);
+                var detail = cliLoads
+                    ? "The CLI itself still loads, so the server log below usually names the reason."
+                    : "The CLI also failed its deep check (dsh web --help), which points at the installation.\n"
+                      + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\n"
+                      + "Or let this app do it: run with --repair-harness, or accept the prompt on the next launch.";
+                Log.Warn($"server start failed; deep CLI check {(cliLoads ? "passed" : "failed")}");
                 return Fail(22,
-                    $"Failed to start the dsh web server.\nServer logs: {AppPaths.LogsDir}",
+                    $"Failed to start the dsh web server.\n\n{detail}\n\nServer logs: {AppPaths.LogsDir}",
                     guard);
             }
 
@@ -291,7 +307,9 @@ public static class Orchestrator
                 guard);
         }
 
-        var usable = tools.DshState == DshState.Found && Tools.VerifyDsh(tools);
+        string? probeError = null;
+        var usable = tools.DshState == DshState.Found && Tools.ProbeCli(tools, out probeError);
+        if (!usable && probeError != null) Log.Info("CLI probe: " + probeError);
 
         /*
          * An absent or half-installed CLI is dealt with first. An interrupted
