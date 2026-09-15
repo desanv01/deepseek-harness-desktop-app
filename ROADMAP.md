@@ -1,14 +1,14 @@
 # Roadmap
 
-The app is feature-complete for its core promise: launch, project-scoped window, verified endpoint, guaranteed shutdown, settings, picker, tray, focus handoff. Three items remain, all of them about **trust and verification** rather than features.
+The app is feature-complete for its core promise: launch, project-scoped window, verified endpoint, guaranteed shutdown, settings, picker, tray, focus handoff — and, since 2026.09.15, a verified self-update with a rollback.
 
-| Item | Why it matters | Rough effort |
+| Item | State | Notes |
 | --- | --- | --- |
-| 1. GitHub Actions | Makes every later change verifiable and ships reproducible artifacts | 0.5 day |
-| 2. Unit tests | Protects the pure logic that the updater will depend on | 1–2 days |
-| 3. Signed self-update | Lets users get new builds without hand-downloading, safely | 2–4 days |
+| 1. GitHub Actions | **done** | `ci.yml` builds and smoke-tests on every push; `release.yml` publishes a tagged build with `SHA256SUMS` |
+| 2. Unit tests | open | The pure logic is where a regression is silent; CI has no test step yet |
+| 3. Signed self-update | **partly done** | Detect, download, checksum-verify, stage, apply, roll back, and notify all ship; Authenticode signing and `WinVerifyTrust` do not |
 
-Recommended order: **1 → 2 → 3**. CI is cheap and unblocks the rest; tests de-risk the updater; the updater depends on both the release pipeline and verified logic.
+What follows is the original plan, kept for the parts that are still open.
 
 ---
 
@@ -44,6 +44,16 @@ Every push and pull request builds and tests the app on a clean Windows runner, 
 - A pull request with a failing test cannot merge (branch protection requires the CI check).
 - Pushing `v2026.09.11` with `<Version>2026.09.11</Version>` publishes a release containing the exe, the zip, and `SHA256SUMS`; a mismatched tag fails the workflow before publishing.
 - CI finishes in under ~5 minutes and needs no repository secrets.
+
+### What shipped (2026-09-15)
+
+`.github/workflows/ci.yml`, `.github/workflows/release.yml`, and `.github/dependabot.yml` implement the design above:
+
+- CI restores, builds `Release`, refuses a `<Version>` that is not a `yyyy.MM.dd` date, publishes the framework-dependent single-file build, and smoke-tests it: `--self-test` must exit `0`, an out-of-range `--port` and an unknown flag must exit `2`. The checks go through `Start-Process -Wait -PassThru`, because `&` does not reliably wait for a GUI-subsystem executable.
+- The release workflow refuses a tag that does not equal `v<Version>`, publishes the self-contained single-file build, writes `SHA256SUMS` over the exe and the zip, and creates the release with `gh release create` (re-running uploads with `--clobber` instead of failing).
+- Dependabot watches NuGet and the actions weekly.
+
+Still open from this item: branch protection, and a `dotnet test` step once item 2 lands.
 
 ### Notes
 
@@ -171,6 +181,18 @@ Level 1 alone does **not** protect against a compromised release, because the ch
 - Applying while a server runs stops the server through the normal job-object path; the relaunched app reopens the same project from `settings.json`.
 - No update is applied without either a valid signature or an explicit `AutoApplyUpdates` opt-in.
 
+### What shipped (2026-09-15)
+
+The whole ladder except signing:
+
+- **Detection** — `AppUpdate` asks `github.com/<repo>/releases/latest` where it redirects (free, not rate limited) and only enriches with the REST API when the anonymous limit allows it; the answer is cached for six hours in `update-check.json`, keyed by the installed version and the feed, and a check never blocks startup. `--no-update-check` and a settings toggle keep it quiet, and `--update-feed` points the whole thing at a `file://` fixture.
+- **Download** — into `updates\<tag>\<asset>` through a `.part` file, with a 256 MB ceiling, a floor that rejects an implausibly small file, and an `MZ` check for an exe. `UpdateHttp` uses the in-process TLS stack first and Node second, because a machine whose TLS stack refuses credentials silently disables every update path.
+- **Verify** — the SHA-256 is compared with the release's `SHA256SUMS`. A mismatch deletes the download and refuses to continue. A release with no `SHA256SUMS` can still be installed, but only after an explicit warning that says it is unverified.
+- **Apply** — `pending.json` plus a helper copy of the *running* build started with `--apply-update`. The app exits (the job object stops the harness server), the helper waits for the pid **and start time**, re-verifies the staged file, keeps the old exe as `<exe>.old`, swaps, relaunches, and rolls back if the new build dies within 12 seconds.
+- **Notify** — tray balloon, tray menu line, window title suffix, and a pill injected into the harness page; all four open the same updates window.
+
+Verified with a local fixture feed: staging, a tampered `SHA256SUMS` refusal, a successful swap-and-restart, and a rollback from a build that exits immediately. Still open: Authenticode signing, `WinVerifyTrust` at apply time, and the `AutoApplyUpdates` opt-in (the apply is always an explicit click today).
+
 ### Risks
 
 - **Certificate cost and identity.** An OV certificate requires a legal entity or a verified individual; Azure Trusted Signing is the cheaper route but still needs identity verification. Decide before building level 2.
@@ -182,17 +204,17 @@ Level 1 alone does **not** protect against a compromised release, because the ch
 
 ## Decisions needed before starting
 
-1. **Code-signing route** — buy an OV certificate, use Azure Trusted Signing, or ship notify-only at level 1 for now?
-2. **Default for `AutoApplyUpdates`** — off is recommended.
-3. **Test framework** — xUnit is recommended.
-4. **CI runners** — GitHub-hosted `windows-latest` is recommended; self-hosted only if the build time becomes a problem.
+1. **Code-signing route** — buy an OV certificate, use Azure Trusted Signing, or ship notify-only at level 1 for now? *Still open; the shipped updater is level 1 (published SHA-256) with an explicit warning when even that is missing.*
+2. **Default for `AutoApplyUpdates`** — off is recommended. *Not implemented: every apply is an explicit click today, which is stricter than the recommendation.*
+3. **Test framework** — xUnit is recommended. *Still open.*
+4. **CI runners** — GitHub-hosted `windows-latest` is recommended; self-hosted only if the build time becomes a problem. *Done: both workflows use `windows-latest`.*
 
 ## Milestones
 
-| Milestone | Contents |
-| --- | --- |
-| A | CI workflow + `SHA256SUMS` published with every release |
-| B | `DSH_DESKTOP_HOME` override + unit tests for options, settings, paths, probe, proc, rotation |
-| C | Update check, download, checksum verification, notify-only UI, cached checks |
-| D | Staged apply with rollback, behind the `AutoApplyUpdates` opt-in |
-| E | Authenticode signing in the release workflow and `WinVerifyTrust` at apply time |
+| Milestone | Contents | State |
+| --- | --- | --- |
+| A | CI workflow + `SHA256SUMS` published with every release | done 2026-09-15 |
+| B | `DSH_DESKTOP_HOME` override + unit tests for options, settings, paths, probe, proc, rotation | the override is done; the unit tests are open |
+| C | Update check, download, checksum verification, notify-only UI, cached checks | done 2026-09-15 |
+| D | Staged apply with rollback, behind the `AutoApplyUpdates` opt-in | the staged apply and rollback are done; the opt-in is open (every apply is a click) |
+| E | Authenticode signing in the release workflow and `WinVerifyTrust` at apply time | open — this is the largest remaining trust gap |

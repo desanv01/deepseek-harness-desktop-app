@@ -50,12 +50,27 @@ jobs:
           # The published app, not the build output: this is what users run.
           dotnet publish src/DeepSeekHarness/DeepSeekHarness.csproj -c Release -r win-x64 `
             --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o dist --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "publish failed with $LASTEXITCODE" }
+
           $env:DSH_DESKTOP_HOME = Join-Path $env:RUNNER_TEMP 'dsh-desktop-ci'
           $exe = Join-Path (Get-Location) 'dist/DeepSeekHarness.exe'
-          & $exe --self-test
-          if ($LASTEXITCODE -ne 0) { throw "--self-test failed with $LASTEXITCODE" }
 
-          # An invalid flag must be rejected with the documented exit code.
-          & $exe --port 99999 2>$null
-          if ($LASTEXITCODE -ne 2) { throw "an out-of-range --port should exit 2, got $LASTEXITCODE" }
+          # This is a GUI-subsystem executable: calling it with & does not
+          # reliably wait for it, so every check goes through Start-Process.
+          function Invoke-App {
+            param([string[]]$AppArguments)
+            $process = Start-Process -FilePath $exe -ArgumentList $AppArguments -Wait -PassThru
+            return $process.ExitCode
+          }
+
+          $code = Invoke-App @('--self-test')
+          if ($code -ne 0) { throw "--self-test failed with $code" }
+
+          # Invalid arguments must be rejected with the documented exit code.
+          $code = Invoke-App @('--port', '99999')
+          if ($code -ne 2) { throw "an out-of-range --port should exit 2, got $code" }
+
+          $code = Invoke-App @('--no-such-flag')
+          if ($code -ne 2) { throw "an unknown flag should exit 2, got $code" }
+
           Write-Host 'command line behaved as documented'

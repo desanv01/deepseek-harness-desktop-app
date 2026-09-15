@@ -84,15 +84,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+            $PSNativeCommandUseErrorActionPreference = $false
+          }
+
           $tag = '${{ steps.version.outputs.tag }}'
           $version = '${{ steps.version.outputs.version }}'
           $name = "DeepSeekHarness-win-x64-$version"
 
-          if (gh release view $tag 2>$null) {
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "release $tag already exists; uploading the assets"
             gh release upload $tag "$name.exe" "$name.zip" SHA256SUMS --clobber
           } else {
-            gh release create $tag "$name.exe" "$name.zip" SHA256SUMS `
-              --title "$tag" `
-              --generate-notes
+            gh release create $tag "$name.exe" "$name.zip" SHA256SUMS --title "$tag" --generate-notes
           }
+          if ($LASTEXITCODE -ne 0) { throw "publishing $tag failed with $LASTEXITCODE" }

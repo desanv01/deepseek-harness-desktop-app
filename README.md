@@ -133,6 +133,24 @@ A missing folder exits with code `2` and a clear message rather than a NuGet sta
 
 Open `DeepSeekHarness.sln` in Visual Studio and use the `PortableFolder` or `PortableSingleFile` publish profile if you prefer the Publish dialog.
 
+### Cutting a release
+
+`<Version>` in `DeepSeekHarness.csproj` is the release date in `yyyy.MM.dd` form, and the release tag is `v<Version>`. The updater compares the two as dates, so they have to agree — and the workflow refuses to publish when they do not.
+
+```powershell
+# 1. set <Version> to today's date, then
+git commit -am "Release 2026.09.15"
+git push origin main
+
+# 2. tag it; the tag is what publishes
+git tag v2026.09.15
+git push origin v2026.09.15
+```
+
+`.github/workflows/release.yml` then builds the self-contained single-file exe from that tag, writes `SHA256SUMS` over the exe and the zip, and creates the GitHub release with all three assets. `.github/workflows/ci.yml` builds every push and pull request, checks that the version is a date, and smoke-tests the published executable's flags and exit codes. Both run on `windows-latest` and need no repository secrets.
+
+The updater downloads the exe and verifies it against `SHA256SUMS` from the same release, so the checksum asset is not optional: a release published without it can still be installed, but only after the app has told you it could not be verified.
+
 ## Command-line reference
 
 ```
@@ -251,22 +269,24 @@ build_portable.ps1         # one self-contained exe + zip
 
 ## Current status
 
-Verified on Windows 11 x64 with .NET 8, WebView2 `152.0.4191.66`, and `@deepseek-ai/dsh` `0.1.2-rc.1`:
+Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek-ai/dsh` `0.1.5-rc.1`:
 
 - `dotnet build -c Release` — clean build;
-- headless boot (`--no-window`) — OS-assigned port, ready line parsed in ~8 s, endpoint verified, server stopped;
+- headless boot (`--no-window`) — OS-assigned port, ready line parsed, endpoint verified, server stopped;
 - GUI launch with `--project` — settings written with the project, home, port, and recent list;
 - second launch with no flags — resolves the project from settings, brings the running window forward, and exits without starting a second server;
 - force-kill of the app — the managed server is gone within seconds;
 - `--stop`, invalid `--port`, unknown flag, missing `--project` — correct exit codes;
-- `--check-harness` — reported `installed 0.1.2-rc.1 / latest 0.1.5-rc.1 / alpha 0.1.5-alpha.2` and exited 10.
+- update check against the live repository — the redirect endpoint reports the newest tag even while the anonymous API limit is exhausted, and `--check-updates` exits `10` when a newer build exists and `0` when the running one is newest;
+- update install against a local release fixture — download, `SHA256SUMS` verification, staged apply, restart; a tampered checksum is refused and the download discarded; a build that exits immediately is rolled back to the previous one;
+- the injected update pill — exercised against a fake DOM (one element, posts on click, hides, survives a missing `document.body`).
 
 Known limitations:
 
 - The app cannot attach to a `dsh web` server it did not start, because a foreign server never publishes its token. It reports the conflict instead of guessing.
 - One window per home: two projects need two homes (`--dsh-home`) rather than two windows over one server.
-- There is no self-update mechanism. Any future updater must verify a signature or a published hash rather than replacing the executable from an unverified download.
-- No automated test suite or CI is present; the checks above were run by hand.
+- Update downloads are verified by checksum, not by signature. `SHA256SUMS` comes from the same release as the binary, so it catches a corrupted or altered download, not a compromised release. Authenticode signing and `WinVerifyTrust` at apply time are the remaining step.
+- There is no automated unit-test suite yet; CI builds, checks the version scheme, and smoke-tests the command line, and the manual checks above were run by hand.
 
 ## Roadmap
 
