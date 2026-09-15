@@ -281,7 +281,7 @@ public static class Orchestrator
         return new Outcome { Mode = Mode.Attach, Guard = guard, Lease = adopted, PageUrl = adopted.Url };
     }
 
-    /** Validates the CLI and optionally updates it; null when the boot may continue. */
+    /** Validates the CLI, repairing or updating it; null when the boot may continue. */
     private static Outcome? PrepareTools(Options o, ref Tools tools, Action<string>? status, CancellationToken ct, ManagedLock guard)
     {
         if (tools.Node == null)
@@ -290,23 +290,42 @@ public static class Orchestrator
                 "Node.js was not found on PATH.\nInstall it from https://nodejs.org and try again.",
                 guard);
         }
-        if (tools.DshMissing)
-        {
-            return Fail(11,
-                "@deepseek-ai/dsh is not installed globally.\nRun:  npm install -g @deepseek-ai/dsh\n"
-                + "Then launch this app again.",
-                guard);
-        }
 
-        var usable = Tools.VerifyDsh(tools);
+        var usable = tools.DshState == DshState.Found && Tools.VerifyDsh(tools);
+
+        /*
+         * An absent or half-installed CLI is dealt with first. An interrupted
+         * `npm install -g` leaves the package directory behind without the files
+         * it needs, which used to end the launch with "not installed globally"
+         * and no way forward. --update, or one confirmation, installs it.
+         */
         if (!usable)
         {
-            return Fail(12,
-                "The installed @deepseek-ai/dsh CLI is incomplete or cannot load its runtime closure.\n"
-                + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\nThen retry.\n\n"
-                + $"Logs: {AppPaths.LogsDir}",
-                guard);
+            if (!o.Update && !ConfirmHarnessInstall(o, tools))
+            {
+                return Fail(tools.DshState == DshState.Missing ? 11 : 12, HarnessProblem(tools), guard);
+            }
+
+            status?.Invoke("Installing @deepseek-ai/dsh with npm ...");
+            Log.Info($"the harness CLI is {(tools.DshBroken ? "incomplete" : "missing")}; installing it");
+            var repair = Updater.Repair(tools, status, ct);
+            ct.ThrowIfCancellationRequested();
+
+            tools = Tools.Discover();
+            if (!repair.Usable || tools.DshState != DshState.Found || !Tools.VerifyDsh(tools))
+            {
+                return Fail(14,
+                    "The DeepSeek Harness CLI is still not usable after reinstalling it.\n\n"
+                    + (repair.Error ?? "npm did not report why it failed.") + "\n\n"
+                    + "Repair it by hand with:  npm install -g @deepseek-ai/dsh@latest\n"
+                    + $"Logs: {AppPaths.LogsDir}",
+                    guard);
+            }
+
+            Log.Info($"harness CLI ready: {tools.DshCli} (version {tools.DshVersion ?? "unknown"})");
+            return null;
         }
+
         if (!o.Update) return null;
 
         status?.Invoke("Updating @deepseek-ai/dsh to the latest npm release ...");
@@ -332,6 +351,61 @@ public static class Orchestrator
                 guard);
         }
         return null;
+    }
+
+    /** Offers to install the harness when it is missing or incomplete. */
+    private static bool ConfirmHarnessInstall(Options o, Tools tools)
+    {
+        if (!o.ShowDialogs) return false;
+
+        var problem = tools.DshBroken
+            ? "@deepseek-ai/dsh is installed but incomplete, so it cannot run."
+            : "@deepseek-ai/dsh is not installed.";
+        var answer = Ui.Confirm(
+            problem + "\n\n"
+            + "Install the newest release now?\n\n"
+            + "    npm install -g @deepseek-ai/dsh@latest\n\n"
+            + (tools.DshPackageDir == null ? "" : "Package folder:\n" + tools.DshPackageDir + "\n\n")
+            + "npm runs in the background; the window opens when it finishes.",
+            "DeepSeek Harness");
+        if (answer) Log.Info("the user asked for the harness CLI to be installed");
+        return answer;
+    }
+
+    /** What to tell the user when the CLI cannot be used and no install was allowed. */
+    private static string HarnessProblem(Tools tools)
+    {
+        var text = new System.Text.StringBuilder();
+        if (tools.DshBroken)
+        {
+            text.AppendLine("@deepseek-ai/dsh is installed but incomplete, so it cannot run.");
+            text.AppendLine();
+            text.AppendLine("This is what an interrupted npm install leaves behind: the package");
+            text.AppendLine("folder is there, but the files the CLI needs are not.");
+            if (tools.DshPackageDir != null) text.AppendLine().AppendLine("Package folder: " + tools.DshPackageDir);
+            if (tools.DshProblem != null) text.AppendLine("Problem: " + tools.DshProblem);
+        }
+        else
+        {
+            text.AppendLine("@deepseek-ai/dsh is not installed globally.");
+        }
+
+        text.AppendLine();
+        text.AppendLine("Install or repair it with:");
+        text.AppendLine("    npm install -g @deepseek-ai/dsh@latest");
+        text.AppendLine("Then launch this app again.");
+
+        if (tools.SearchLog.Count > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("Where the app looked:");
+            foreach (var line in tools.SearchLog) text.AppendLine("  " + line);
+        }
+
+        text.AppendLine();
+        text.AppendLine("Launch with --update to let the app run that install for you.");
+        text.AppendLine($"Logs: {AppPaths.LogsDir}");
+        return text.ToString();
     }
 
     private static Outcome Fail(int code, string message, ManagedLock? guard)

@@ -25,9 +25,17 @@ public static class SelfTest
         Line("== DeepSeek Harness self test ==");
         Line("node        : " + (t.Node ?? "NOT FOUND"));
         Line("npm cli     : " + (t.NpmCli ?? "NOT FOUND"));
-        Line("dsh cli     : " + (t.DshCli ?? "NOT FOUND"));
+        Line("dsh state   : " + Describe(t));
+        Line("dsh entry   : " + (t.DshCli ?? "NOT FOUND"));
         Line("dsh version : " + (t.DshVersion ?? "n/a"));
         Line("dsh health  : " + (Tools.VerifyDsh(t) ? "CLI VALID" : "CLI UNUSABLE"));
+        if (t.DshPackageDir != null) Line("dsh package : " + t.DshPackageDir);
+        if (t.DshProblem != null) Line("dsh problem : " + t.DshProblem);
+        if (t.DshMissing)
+        {
+            Line("dsh search  :");
+            foreach (var line in t.SearchLog) Line("  " + line);
+        }
         Line("project     : " + (o.ProjectDir ?? "(not selected; the picker would run)"));
         Line("DSH_HOME    : " + o.ResolveHome());
         Line("endpoint    : " + o.TargetLabel + (o.Port == 0 ? " (OS picks a free port)" : ""));
@@ -50,4 +58,12 @@ public static class SelfTest
         Line("== done ==");
         return 0;
     }
+
+    /** "found 0.1.5-rc.1", "incomplete (an interrupted npm install)" or "not installed". */
+    private static string Describe(Tools t) => t.DshState switch
+    {
+        DshState.Found => "FOUND",
+        DshState.Broken => "INCOMPLETE - installed but it cannot run",
+        _ => "NOT INSTALLED",
+    };
 }

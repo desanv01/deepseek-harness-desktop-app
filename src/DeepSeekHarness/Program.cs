@@ -44,6 +44,7 @@ internal static class Program
             if (opts.CheckHarness) return HarnessUpdate.RunCheck();
             if (opts.CheckUpdates) return UpdateCli.Run(opts);
             if (opts.InstallUpdate) return UpdateCli.RunInstall(opts);
+            if (opts.RepairHarness) return HarnessCli.RunRepair();
             if (opts.Stop) return Orchestrator.RunStop(opts);
             return Orchestrator.Run(opts);
         }

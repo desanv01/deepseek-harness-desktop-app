@@ -33,6 +33,9 @@ public sealed class Options
     /** --install-update: download and verify the newest release, then exit. */
     public bool InstallUpdate { get; private set; }
 
+    /** --repair-harness: install or repair the global harness CLI, then exit. */
+    public bool RepairHarness { get; private set; }
+
     /** --apply-now: with --install-update, hand over to the helper instead of stopping at staging. */
     public bool ApplyNow { get; private set; }
 
@@ -44,6 +47,9 @@ public sealed class Options
 
     /** Release feed to read instead of the GitHub API (file:// or a URL). */
     public string? UpdateFeedUrl { get; private set; }
+
+    /** --dsh-cli: the harness entry point to use instead of searching for it. */
+    public string? DshCli { get; private set; }
     public int ReadyTimeoutSec { get; private set; } = 240;
 
     /** True when the flag was named on the command line, so settings must not override it. */
@@ -83,8 +89,7 @@ public sealed class Options
 
     public static Options Parse(string[] args)
     {
-        var o = new Options();
-        for (var i = 0; i < args.Length; i++)
+        var o = new Options();        for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
             {
@@ -107,6 +112,10 @@ public sealed class Options
                 case "--home":
                     o.DshHome = ReadHome(args, ref i);
                     o.HomeSpecified = true;
+                    break;
+                case "--dsh-cli":
+                case "-dsh-cli":
+                    o.DshCli = ReadDshCli(args, ref i);
                     break;
                 case "--ready-timeout":
                 case "-ready-timeout":
@@ -150,6 +159,10 @@ public sealed class Options
                 case "-apply-now":
                     o.ApplyNow = true;
                     break;
+                case "--repair-harness":
+                case "-repair-harness":
+                    o.RepairHarness = true;
+                    break;
                 case "--no-update-check":
                 case "-no-update-check":
                     o.NoUpdateCheck = true;
@@ -168,8 +181,16 @@ public sealed class Options
                     throw new ArgumentException($"Unknown argument '{args[i]}'. Use the documented flags in the desktop launcher.");
             }
         }
+        Current = o;
         return o;
     }
+
+    /**
+     * The options this process was started with. Tools.Discover reads it so
+     * --dsh-cli is honoured everywhere the CLI is looked up, without threading
+     * the options through every window.
+     */
+    public static Options? Current { get; private set; }
 
     /** Applies remembered settings only where the command line stayed silent. */
     internal void ApplySettings(AppSettings settings)
@@ -260,8 +281,7 @@ public sealed class Options
      * The release feed to read instead of the GitHub API: an https URL, a
      * file:// URL, or the path of a local release document.
      */
-    private static string ReadFeed(string[] args, ref int index)
-    {
+    private static string ReadFeed(string[] args, ref int index)    {
         if (index + 1 >= args.Length)
             throw new ArgumentException("--update-feed requires a URL or the path of a release JSON file");
         var value = args[++index].Trim().Trim('"');
@@ -285,6 +305,27 @@ public sealed class Options
         }
         if (!File.Exists(full))
             throw new ArgumentException($"--update-feed file does not exist: {full}");
+        return full;
+    }
+
+    /** --dsh-cli: the JavaScript entry point of an installed harness CLI. */
+    private static string ReadDshCli(string[] args, ref int index)
+    {
+        if (index + 1 >= args.Length)
+            throw new ArgumentException("--dsh-cli requires the path of the harness entry point (bin.js)");
+        var value = args[++index].Trim().Trim('"');
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(value);
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException($"--dsh-cli is not a valid path: '{value}' ({ex.Message})");
+        }
+        if (!File.Exists(full))
+            throw new ArgumentException($"--dsh-cli file does not exist: {full}");
         return full;
     }
 }
