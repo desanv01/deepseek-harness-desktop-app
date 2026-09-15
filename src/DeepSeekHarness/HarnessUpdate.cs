@@ -41,7 +41,51 @@ public static class HarnessUpdate
     /** Channel the app follows. The plugin home needs the conservative one. */
     public const string DefaultChannel = "latest";
 
-    public static async Task<HarnessVersions?> QueryAsync(string? installed, string channel = DefaultChannel)
+    /** One registry read at a time, and one answer reused for a minute. */
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static readonly TimeSpan Fresh = TimeSpan.FromSeconds(60);
+    private static HarnessVersions? _last;
+    private static string? _lastKey;
+    private static DateTimeOffset _lastAt;
+
+    /**
+     * Reads the published versions. force: ask again even when the last answer
+     * is still fresh (the "Check now" button does that).
+     */
+    public static async Task<HarnessVersions?> QueryAsync(
+        string? installed,
+        string channel = DefaultChannel,
+        bool force = false)
+    {
+        var key = (installed ?? "") + "|" + channel;
+
+        await Gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!force
+                && _last != null
+                && _lastKey == key
+                && DateTimeOffset.UtcNow - _lastAt < Fresh)
+            {
+                return _last;
+            }
+
+            var result = await QueryCoreAsync(installed, channel).ConfigureAwait(false);
+            if (result != null)
+            {
+                _last = result;
+                _lastKey = key;
+                _lastAt = DateTimeOffset.UtcNow;
+            }
+            return result;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    private static async Task<HarnessVersions?> QueryCoreAsync(string? installed, string channel)
     {
         try
         {

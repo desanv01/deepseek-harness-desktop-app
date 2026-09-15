@@ -95,6 +95,13 @@ public static class AppUpdate
     /** Ceiling for a release feed document. */
     private const long MaxFeedBytes = 4L * 1024 * 1024;
 
+    /**
+     * One check at a time per process. The window and the updates window both
+     * ask on startup, and without this they spend two requests and race over the
+     * cache file (which showed up as "the process cannot access the file").
+     */
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     public static string FeedUrl(string? overrideUrl = null)
@@ -108,6 +115,22 @@ public static class AppUpdate
         bool force,
         string? feedOverride = null,
         CancellationToken ct = default)
+    {
+        await Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await CheckCoreAsync(force, feedOverride, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    private static async Task<AppUpdateInfo> CheckCoreAsync(
+        bool force,
+        string? feedOverride,
+        CancellationToken ct)
     {
         var installed = AppInfo.Version;
         var customFeed = !string.IsNullOrWhiteSpace(feedOverride);
@@ -398,7 +421,9 @@ public static class AppUpdate
         try
         {
             Directory.CreateDirectory(AppPaths.Root);
-            var temp = AppPaths.UpdateCheckCacheFile + "." + Environment.ProcessId + ".tmp";
+            // Unique per write: two checks in one process must not share the file.
+            var temp = AppPaths.UpdateCheckCacheFile + "." + Environment.ProcessId + "."
+                       + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(entry, Json));
             File.Move(temp, AppPaths.UpdateCheckCacheFile, overwrite: true);
         }

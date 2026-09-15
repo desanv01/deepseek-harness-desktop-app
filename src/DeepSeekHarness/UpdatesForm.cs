@@ -118,7 +118,7 @@ public sealed class UpdatesForm : Form
             _loading = false;
             _staged = UpdateInstaller.ReadPending();
             await CheckAppAsync(force: false);
-            await CheckHarnessAsync();
+            await CheckHarnessAsync(force: false);
         };
         FormClosing += (_, _) =>
         {
@@ -400,11 +400,12 @@ public sealed class UpdatesForm : Form
         return page;
     }
 
-    private async Task CheckHarnessAsync()
+    /** force is false for the check the window runs when it opens. */
+    private async Task CheckHarnessAsync(bool force = true)
     {
         _harnessStatus.Text = "Reading the npm registry ...";
         _harnessInstalled.Text = Tools.Discover().DshVersion ?? "not installed";
-        var info = await HarnessUpdate.QueryAsync(_harnessInstalled.Text, HarnessUpdate.DefaultChannel)
+        var info = await HarnessUpdate.QueryAsync(_harnessInstalled.Text, HarnessUpdate.DefaultChannel, force)
             .ConfigureAwait(true);
         _harness = info;
 

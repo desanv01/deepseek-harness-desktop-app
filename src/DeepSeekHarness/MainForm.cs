@@ -274,7 +274,7 @@ public sealed class MainForm : Form
     private async Task OnCheckHarnessAsync()
     {
         var tools = Tools.Discover();
-        var info = await HarnessUpdate.QueryAsync(tools.DshVersion).ConfigureAwait(true);
+        var info = await HarnessUpdate.QueryAsync(tools.DshVersion, force: true).ConfigureAwait(true);
         _harnessVersions = info;
 
         if (info == null)
