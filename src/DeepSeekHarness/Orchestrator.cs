@@ -16,6 +16,9 @@ public static class Orchestrator
 {
     private enum Mode { Cancelled, Attach, Owned, Focused }
 
+    /** Set when safe mode had to disable a plugin to get this boot through. */
+    private static string? _recovered;
+
     private sealed class Outcome : IDisposable
     {
         public Mode Mode;
@@ -24,6 +27,9 @@ public static class Orchestrator
         public ManagedLock? Guard;
         public ServerLease? Lease;
         public string? PageUrl;
+
+        /** What safe mode had to disable, when it had to. */
+        public string? Recovered;
 
         public void Dispose()
         {
@@ -165,7 +171,7 @@ public static class Orchestrator
 
         try
         {
-            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.ResolveHome(), o.UpdatePolicy, webView);
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.ResolveHome(), o.UpdatePolicy, webView, outcome.Recovered);
             if (o.OpenUpdates) form.OpenUpdatesWhenShown();
             onFocus = form.FocusFromSignal;
             signal?.Start();
@@ -225,23 +231,62 @@ public static class Orchestrator
                 Log.Info($"desktop plugin {plugin.Describe()}");
             }
 
+            if (o.SafeMode)
+            {
+                var trimmed = SafeMode.Enter(home);
+                if (trimmed != null) Log.Warn("safe mode: " + trimmed);
+                else Say("Safe mode: booting with the base bundles only");
+            }
+
             Say($"Starting the DeepSeek Harness server for {o.ProjectDir} ...");
             lease = ServerManager.Start(tools, o, status, ct);
             if (lease == null)
             {
-                // The launch path does not run the deep CLI check, so this is
-                // where spending 7 seconds on it pays for itself: it separates
-                // "the harness failed" from "the installation is broken".
-                var cliLoads = Tools.VerifyDsh(tools);
-                var detail = cliLoads
-                    ? "The CLI itself still loads, so the server log below usually names the reason."
-                    : "The CLI also failed its deep check (dsh web --help), which points at the installation.\n"
-                      + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\n"
-                      + "Or let this app do it: run with --repair-harness, or accept the prompt on the next launch.";
-                Log.Warn($"server start failed; deep CLI check {(cliLoads ? "passed" : "failed")}");
-                return Fail(22,
-                    $"Failed to start the dsh web server.\n\n{detail}\n\nServer logs: {AppPaths.LogsDir}",
-                    guard);
+                /*
+                 * A plugin the harness cannot load aborts the whole profile, and
+                 * the app would simply never open. The loader names the row it
+                 * choked on, so disable that one and try again - once - before
+                 * reporting a failure.
+                 */
+                var failure = SafeMode.ReadFailureText();
+                var recovery = SafeMode.DisableFailedPlugin(home, failure);
+                if (recovery.Recovered)
+                {
+                    var change = SafeMode.DescribeChange(home, tools);
+                    var why = recovery.Bundle != null
+                        ? $"{recovery.Bundle} could not be loaded by this harness and was disabled"
+                        : $"profile row {recovery.DisabledRow} could not be loaded and was disabled";
+                    Log.Warn($"safe mode: {why}{(change == null ? "" : " (" + change + ")")}");
+                    status?.Invoke($"{why}. Trying again ...");
+
+                    lease = ServerManager.Start(tools, o, status, ct);
+                    if (lease != null)
+                    {
+                        _recovered = why;
+                    }
+                }
+
+                if (lease == null)
+                {
+                    // The launch path does not run the deep CLI check, so this is
+                    // where spending 7 seconds on it pays for itself: it separates
+                    // "the harness failed" from "the installation is broken".
+                    var cliLoads = Tools.VerifyDsh(tools);
+                    var detail = cliLoads
+                        ? "The CLI itself still loads, so the server log below usually names the reason."
+                        : "The CLI also failed its deep check (dsh web --help), which points at the installation.\n"
+                          + "Repair it with:  npm install -g @deepseek-ai/dsh@latest\n"
+                          + "Or let this app do it: run with --repair-harness, or accept the prompt on the next launch.";
+                    var recoveryNote = recovery.Detail == null
+                        ? ""
+                        : $"\n\nSafe mode: {recovery.Detail}.";
+                    Log.Warn($"server start failed; deep CLI check {(cliLoads ? "passed" : "failed")}");
+                    return Fail(22,
+                        $"Failed to start the dsh web server.{recoveryNote}\n\n{detail}\n\n"
+                        + $"Server logs: {AppPaths.LogsDir}\n"
+                        + "Try --safe-mode to boot without the plugins this home added.",
+                        guard);
+                }
             }
 
             Say("Verifying the harness endpoint ...");
@@ -258,7 +303,11 @@ public static class Orchestrator
             }
 
             Say("Server is ready");
-            return new Outcome { Mode = Mode.Owned, Lease = lease, Guard = guard, PageUrl = lease.Url };
+            SafeMode.RememberGoodBoot(home, tools);
+            return new Outcome
+            {
+                Mode = Mode.Owned, Lease = lease, Guard = guard, PageUrl = lease.Url, Recovered = _recovered,
+            };
         }
         catch (OperationCanceledException)
         {

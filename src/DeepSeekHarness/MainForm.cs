@@ -94,6 +94,7 @@ public sealed class MainForm : Form, IBridgeHost
     private readonly Task<CoreWebView2Environment?>? _warmEnvironment;
     private bool _checksStarted;
     private StagedUpdate? _staged;
+    private readonly string? _recovered;
 
     /**
      * Starts the embedded browser's process tree before the window exists, so
@@ -129,7 +130,8 @@ public sealed class MainForm : Form, IBridgeHost
         string projectDir,
         string harnessHome,
         UpdatePolicy? policy = null,
-        Task<CoreWebView2Environment?>? warmEnvironment = null)
+        Task<CoreWebView2Environment?>? warmEnvironment = null,
+        string? recovered = null)
     {
         _url = url;
         _userDataDir = userDataDir;
@@ -138,6 +140,7 @@ public sealed class MainForm : Form, IBridgeHost
         _policy = policy ?? new UpdatePolicy(CheckOnLaunch: true, FeedUrl: null);
         _warmEnvironment = warmEnvironment;
         _staged = UpdateInstaller.ReadPending();
+        _recovered = recovered;
 
         var projectName = "";
         try
@@ -185,6 +188,7 @@ public sealed class MainForm : Form, IBridgeHost
     private void OnShown(object? sender, EventArgs e)
     {
         EnsureTray();
+        AnnounceRecovery();
 
         // The update checks are cheap but not free, and they compete with the
         // page for network and CPU, so they wait for the first paint. This is
@@ -195,6 +199,27 @@ public sealed class MainForm : Form, IBridgeHost
         {
             _openUpdatesOnShown = false;
             BeginInvoke(new Action(ShowUpdates));
+        }
+    }
+
+    /**
+     * Says so when safe mode had to disable a plugin to get this far: silently
+     * running with a plugin switched off would be worse than the failure.
+     */
+    private void AnnounceRecovery()
+    {
+        if (string.IsNullOrEmpty(_recovered)) return;
+        try
+        {
+            _harnessStatus = _recovered!;
+            _tray?.SetHarnessStatus(_harnessStatus);
+            _tray?.AnnounceUpdate(
+                "A plugin was disabled",
+                _recovered + ". Open Settings, then Updates, to review the plugins this home runs.");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not announce the safe-mode recovery: " + ex.Message);
         }
     }
 

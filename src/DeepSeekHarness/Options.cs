@@ -42,6 +42,9 @@ public sealed class Options
     /** --bridge-selftest: exercise the page bridge protocol without a browser. */
     public bool BridgeSelfTest { get; private set; }
 
+    /** --safe-mode: boot with the base bundles only, leaving added plugins aside. */
+    public bool SafeMode { get; private set; }
+
     /** --apply-now: with --install-update, hand over to the helper instead of stopping at staging. */
     public bool ApplyNow { get; private set; }
 
@@ -176,6 +179,10 @@ public sealed class Options
                 case "--bridge-selftest":
                 case "-bridge-selftest":
                     o.BridgeSelfTest = true;
+                    break;
+                case "--safe-mode":
+                case "-safe-mode":
+                    o.SafeMode = true;
                     break;
                 case "--no-update-check":
                 case "-no-update-check":

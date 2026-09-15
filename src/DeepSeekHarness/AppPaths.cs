@@ -60,6 +60,9 @@ public static class AppPaths
     /** The desktop app's own DSH plugins, extracted from the executable. */
     public static string PluginsDir => Path.Combine(Root, "plugins");
 
+    /** What the last successful boot looked like. */
+    public static string BootStateFile => Path.Combine(Root, "boot-state.json");
+
     /** Cached answer of the last GitHub release check. */
     public static string UpdateCheckCacheFile => Path.Combine(Root, "update-check.json");
 

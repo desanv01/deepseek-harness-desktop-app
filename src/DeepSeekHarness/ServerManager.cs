@@ -76,6 +76,11 @@ public static class ServerManager
 {
     private static readonly Regex ReadyLine = new(@"^dsh web:\s*(?<url>http://\S+)", RegexOptions.Compiled);
 
+    /** Why the last start failed, and where its output went, for diagnosis. */
+    public static string? LastFailure { get; private set; }
+    public static string? LastOutLog { get; private set; }
+    public static string? LastErrLog { get; private set; }
+
     /** Spawns `dsh web --no-open --port 0` and waits for its ready line. */
     public static ServerLease? Start(Tools t, Options o, Action<string>? status, CancellationToken ct)
     {
@@ -85,6 +90,9 @@ public static class ServerManager
 
         var outLog = AppPaths.NewLogPath("server", ".out.log");
         var errLog = AppPaths.NewLogPath("server", ".err.log");
+        LastFailure = null;
+        LastOutLog = outLog;
+        LastErrLog = errLog;
         var home = o.ResolveHome();
         var project = o.ProjectDir ?? Environment.CurrentDirectory;
         try { Directory.CreateDirectory(home); }
@@ -134,7 +142,8 @@ public static class ServerManager
             if (ct.IsCancellationRequested) break;
             if (!Proc.IsAlive(spawned.Pid))
             {
-                Log.Error("the managed server exited before it printed a ready line");
+                LastFailure = "the managed server exited before it printed a ready line";
+                Log.Error(LastFailure);
                 break;
             }
             ready.Task.Wait(200);
@@ -147,8 +156,8 @@ public static class ServerManager
         }
         if (!ready.Task.IsCompleted)
         {
-            Log.Error($"the managed server did not print a ready line within {o.ReadyTimeoutSec}s; "
-                      + $"logs: {outLog}");
+            LastFailure = $"the managed server did not print a ready line within {o.ReadyTimeoutSec}s";
+            Log.Error($"{LastFailure}; logs: {outLog}");
             StopProcess(spawned, job);
             return null;
         }
