@@ -11,7 +11,7 @@
 
 DeepSeek Harness normally runs as `dsh web` in a terminal and is opened in a browser tab. This app removes that step: one executable boots the harness, renders its interface in an embedded WebView2 window, and owns the server lifecycle end to end. No terminal, no browser profiles, no manual start or stop.
 
-> **Project status:** this is a working baseline, built and verified against `@deepseek-ai/dsh` 0.1.2-rc.1 on Windows 11. The launch, attach, and shutdown paths are tested. Settings persistence, log rotation, and a signed updater are not implemented yet. See [Current status](#current-status).
+> **Project status:** this is a working baseline, built and verified against `@deepseek-ai/dsh` 0.1.2-rc.1 on Windows 11. The launch, attach, and shutdown paths are tested. A signed self-update is not implemented yet. See [Current status](#current-status).
 
 ---
 
@@ -47,7 +47,8 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Verified endpoint** — confirms the served root document contains the DSH bootstrap global before showing it, so an unrelated local service is never embedded.
 - **Guaranteed shutdown** — the child is assigned to a Windows job object with kill-on-close. When the app exits, crashes, or is force-killed, the server and its descendants are terminated by the OS.
 - **One server per home** — a named mutex keyed by `DSH_HOME` means a second launch hands focus to the running window instead of starting a second writer over the same session files.
-- **Tray icon** — minimizing hides the window to the tray; the menu reopens it, opens the project folder or the log directory, shows the installed harness version, checks for a newer harness, and stops the server.
+- **Tray icon** — present for the whole window lifetime: hide the window to the tray, bring it back, open the project folder or the log directory, see the installed harness version, check for a newer harness, and stop the server.
+- **Ordinary window behavior** — minimizing minimizes to the taskbar like any other window; hiding to the tray is an explicit tray-menu action, and closing the window still stops the server.
 - **Harness version aware** — on launch it reads the npm `latest` and `alpha` dist-tags once and shows the result in the tray. The check is read-only; installing is a deliberate click that verifies the CLI before the window restarts.
 - **Bounded logs** — `desktop.log` rotates at 4 MB and old server logs are pruned at startup.
 - **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.

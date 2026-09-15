@@ -12,10 +12,18 @@ public sealed class TrayIcon : IDisposable
     private readonly ToolStripMenuItem _harnessItem;
     private bool _hintShown;
 
-    public TrayIcon(Icon icon, string projectDir, Action onOpen, Action onExit, Action onCheckHarness, string harnessStatus)
+    public TrayIcon(
+        Icon icon,
+        string projectDir,
+        Action onOpen,
+        Action onHide,
+        Action onExit,
+        Action onCheckHarness,
+        string harnessStatus)
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open window", null, (_, _) => onOpen());
+        menu.Items.Add("Hide to tray", null, (_, _) => onHide());
         menu.Items.Add("Open project folder", null, (_, _) => Open(projectDir));
         menu.Items.Add("Open logs", null, (_, _) => Open(AppPaths.LogsDir));
         menu.Items.Add(new ToolStripSeparator());
@@ -49,7 +57,7 @@ public sealed class TrayIcon : IDisposable
         try { _icon.Text = text.Length > 63 ? text[..63] : text; } catch { }
     }
 
-    /** Explains the tray once per process, the first time the window hides. */
+    /** Explains the tray once per process, the first time the window is hidden. */
     public void ShowHintOnce()
     {
         if (_hintShown) return;
@@ -57,7 +65,8 @@ public sealed class TrayIcon : IDisposable
         try
         {
             _icon.ShowBalloonTip(4000, "DeepSeek Harness",
-                "Still running in the tray. The server keeps working until you close it.", ToolTipIcon.Info);
+                "The window is hidden, but the server keeps running. Double-click this icon to bring it back.",
+                ToolTipIcon.Info);
         }
         catch
         {

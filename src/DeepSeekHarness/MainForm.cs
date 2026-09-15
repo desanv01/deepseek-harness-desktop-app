@@ -27,6 +27,7 @@ public sealed class MainForm : Form
     private WebView2? _web;
     private Color? _pageBg; // measured from the rendered page once loaded
     private TrayIcon? _tray;
+    private FormWindowState _stateBeforeHide = FormWindowState.Normal;
     private string _harnessStatus = "Harness: checking ...";
     private HarnessVersions? _harnessVersions;
     private bool _harnessCheckRunning;
@@ -64,14 +65,25 @@ public sealed class MainForm : Form
         RecolorStatus();
 
         Load += OnLoadAsync;
-        Shown += (_, _) => { _ = CheckHarnessAsync(); };
-        Resize += OnResizeToTray;
+        Shown += OnShown;
         FormClosing += (_, _) =>
         {
             _tray?.Dispose();
             _tray = null;
             _web?.Dispose();
         };
+    }
+
+    /**
+     * The window exists: publish the tray icon and start the background checks.
+     * The tray is not a side effect of minimizing any more - minimizing is an
+     * ordinary taskbar minimize - so it is created up front and stays available
+     * for the whole window lifetime.
+     */
+    private void OnShown(object? sender, EventArgs e)
+    {
+        EnsureTray();
+        _ = CheckHarnessAsync();
     }
 
     /** Brings the window forward when a later launch asks this instance to focus. */
@@ -88,15 +100,47 @@ public sealed class MainForm : Form
         }
     }
 
-    private void OnResizeToTray(object? sender, EventArgs e)
+    private void EnsureTray()
     {
-        if (WindowState != FormWindowState.Minimized || !ShowInTaskbar) return;
-        _tray ??= new TrayIcon(Icon ?? SystemIcons.Application, _projectDir, RestoreFromTray, Close,
-                               () => _ = OnCheckHarnessAsync(), _harnessStatus);
-        _tray.SetHarnessStatus(_harnessStatus);
-        Hide();
-        ShowInTaskbar = false;
-        _tray.ShowHintOnce();
+        if (_tray != null) return;
+        try
+        {
+            _tray = new TrayIcon(
+                Icon ?? SystemIcons.Application,
+                _projectDir,
+                onOpen: RestoreFromTray,
+                onHide: HideToTray,
+                onExit: Close,
+                onCheckHarness: () => _ = OnCheckHarnessAsync(),
+                harnessStatus: _harnessStatus);
+            _tray.SetHarnessStatus(_harnessStatus);
+        }
+        catch (Exception ex)
+        {
+            // a tray icon can be refused (no shell, policy); the window still works
+            Log.Warn("could not create the tray icon: " + ex.Message);
+        }
+    }
+
+    /**
+     * Explicit "Hide to tray": the window leaves the taskbar, the server keeps
+     * running. Only this action hides the window - minimizing minimizes.
+     */
+    public void HideToTray()
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try
+        {
+            if (Visible && WindowState != FormWindowState.Minimized) _stateBeforeHide = WindowState;
+            Hide();
+            ShowInTaskbar = false;
+            _tray?.ShowHintOnce();
+            Log.Info("window hidden to the tray; the server keeps running");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not hide to the tray: " + ex.Message);
+        }
     }
 
     /**
@@ -234,11 +278,18 @@ public sealed class MainForm : Form
     private void RestoreFromTray()
     {
         if (IsDisposed) return;
-        ShowInTaskbar = true;
-        if (!Visible) Show();
-        WindowState = FormWindowState.Normal;
-        Activate();
-        BringToFront();
+        try
+        {
+            ShowInTaskbar = true;
+            if (!Visible) Show();
+            WindowState = WindowState == FormWindowState.Minimized ? FormWindowState.Normal : _stateBeforeHide;
+            Activate();
+            BringToFront();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not bring the window forward: " + ex.Message);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
