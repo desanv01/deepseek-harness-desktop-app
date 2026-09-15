@@ -32,7 +32,7 @@ public sealed class UpdatesForm : Form
     private readonly Label _appInstalled = Value("");
     private readonly Label _appLatest = Value("");
     private readonly Label _appStatus = Status();
-    private readonly TextBox _appNotes = Notes();
+    private readonly RichTextBox _appNotes = Notes();
     private readonly ProgressBar _progress = new()
     {
         Dock = DockStyle.Fill,
@@ -224,7 +224,7 @@ public sealed class UpdatesForm : Form
         _appLatest.Text = info?.Latest == null
             ? "unknown"
             : $"{info.Latest.Version}   {info.Latest.Describe()}";
-        _appNotes.Text = info?.Latest?.Notes.Trim() is { Length: > 0 } notes ? notes : "(no release notes)";
+        MarkdownView.Render(_appNotes, info?.Latest?.Notes);
 
         if (info == null)
         {
@@ -581,15 +581,17 @@ public sealed class UpdatesForm : Form
         Font = new Font("Segoe UI", 9.5f),
     };
 
-    private static TextBox Notes() => new()
+    private static RichTextBox Notes() => new()
     {
         Multiline = true,
         ReadOnly = true,
-        ScrollBars = ScrollBars.Vertical,
+        ScrollBars = RichTextBoxScrollBars.Vertical,
         BorderStyle = BorderStyle.FixedSingle,
         BackColor = NativeTheme.IsSystemDark() ? Color.FromArgb(26, 26, 30) : Color.White,
         ForeColor = Theme.Foreground,
-        Font = new Font("Segoe UI", 9f),
+        Font = new Font("Segoe UI", 9.5f),
+        WordWrap = true,
+        DetectUrls = false,
     };
 
     private static Button Action(string text) => new()
