@@ -46,6 +46,10 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           Write-Host "publishing $tag"
 
+      - name: Fetch the pnpm runtime the app carries
+        shell: pwsh
+        run: ./tools/fetch-pnpm.ps1
+
       - name: Restore
         run: dotnet restore src/DeepSeekHarness/DeepSeekHarness.csproj -r win-x64
 
