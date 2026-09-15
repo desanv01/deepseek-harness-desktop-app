@@ -3,7 +3,8 @@ param(
     [switch]$SingleFile,      # lone self-contained exe (BunkrDownloader-style) + zip
     [switch]$Portable,        # self-contained exe+DLLs folder + zip (CyberleekViewer-style)
     [switch]$RefreshIcons,
-    [string]$RestoreSource    # NuGet source to restore from (folder or URL) instead of nuget.org
+    [string]$RestoreSource,   # NuGet source to restore from (folder or URL) instead of nuget.org
+    [switch]$SkipPnpm         # do not fetch the pnpm runtime used to install plugins
 )
 <#
 .SYNOPSIS
@@ -57,6 +58,47 @@ if ($RefreshIcons) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+function Get-PnpmRuntime {
+    <#
+      Fetches the pnpm runtime the app uses to install third-party harness
+      plugins. It is fetched here rather than committed because it is a 12 MB
+      vendored binary: assets\pnpm\ is git-ignored, and a build without network
+      still works - the app then downloads the runtime the first time someone
+      installs a plugin.
+    #>
+    param([switch]$Skip)
+    if ($Skip) { Write-Output 'skipping the pnpm runtime (-SkipPnpm)'; return }
+    $assets = Join-Path $root 'assets\pnpm'
+    $target = Join-Path $assets 'pnpm.mjs'
+    if (Test-Path -LiteralPath $target) {
+        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
+        Write-Output ("pnpm runtime present ({0} MB)" -f $mb)
+        return
+    }
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Output 'npm was not found; the build will ship without the pnpm runtime'
+        return
+    }
+    $version = '11.7.0'
+    Write-Output ("fetching the pnpm {0} runtime" -f $version)
+    New-Item -ItemType Directory -Force -Path $assets | Out-Null
+    $cache = Join-Path $root '.pnpm-fetch-cache'
+    try {
+        & npm install --prefix $assets "pnpm@$version" --no-save --no-audit --no-fund --loglevel=error --cache $cache 2>&1 |
+            Select-Object -Last 3 | ForEach-Object { Write-Output ("  " + $_) }
+        $dist = Join-Path $assets 'node_modules\pnpm\dist'
+        foreach ($file in @('pnpm.mjs', 'worker.js')) {
+            Copy-Item -LiteralPath (Join-Path $dist $file) -Destination (Join-Path $assets $file) -Force
+        }
+        Remove-Item -LiteralPath (Join-Path $assets 'node_modules') -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $assets 'package.json') -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $assets 'package-lock.json') -Force -ErrorAction SilentlyContinue
+        Write-Output ("pnpm runtime ready: {0}" -f $assets)
+    }
+    catch {
+        Write-Output ("could not fetch the pnpm runtime ({0}); the app will download it on demand" -f $_.Exception.Message)
+    }
+}
 function Get-Version {
     $xml = Get-Content -LiteralPath $proj -Raw
     $m = [regex]::Match($xml, '<Version>([^<]+)</Version>')
@@ -92,6 +134,8 @@ function New-Zip {
 
 $version = Get-Version
 Write-Output ("building DeepSeek Harness desktop v{0}" -f $version)
+
+Get-PnpmRuntime -Skip:$SkipPnpm
 
 if ($SelfContained) { $SingleFile = $true }
 

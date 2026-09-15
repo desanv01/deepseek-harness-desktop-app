@@ -32,3 +32,6 @@ credentials*
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# pnpm runtime fetched at build time (see build.ps1); not vendored in git
+assets/pnpm/

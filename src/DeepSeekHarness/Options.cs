@@ -45,6 +45,19 @@ public sealed class Options
     /** --safe-mode: boot with the base bundles only, leaving added plugins aside. */
     public bool SafeMode { get; private set; }
 
+    /** --add-plugin <spec>: install a harness plugin into the home, then exit. */
+    public string? AddPlugin { get; private set; }
+
+    /** --remove-plugin <name>: remove one, then exit. */
+    public string? RemovePlugin { get; private set; }
+
+    /** --plugin-list: print the plugins this home runs, then exit. */
+    public bool PluginList { get; private set; }
+
+    /** --enable-plugin / --disable-plugin <name>: switch one through the patch layer. */
+    public string? EnablePlugin { get; private set; }
+    public string? DisablePlugin { get; private set; }
+
     /** --apply-now: with --install-update, hand over to the helper instead of stopping at staging. */
     public bool ApplyNow { get; private set; }
 
@@ -184,6 +197,26 @@ public sealed class Options
                 case "-safe-mode":
                     o.SafeMode = true;
                     break;
+                case "--add-plugin":
+                case "-add-plugin":
+                    o.AddPlugin = ReadValue(args, ref i, "add-plugin");
+                    break;
+                case "--remove-plugin":
+                case "-remove-plugin":
+                    o.RemovePlugin = ReadValue(args, ref i, "remove-plugin");
+                    break;
+                case "--plugin-list":
+                case "-plugin-list":
+                    o.PluginList = true;
+                    break;
+                case "--enable-plugin":
+                case "-enable-plugin":
+                    o.EnablePlugin = ReadValue(args, ref i, "enable-plugin");
+                    break;
+                case "--disable-plugin":
+                case "-disable-plugin":
+                    o.DisablePlugin = ReadValue(args, ref i, "disable-plugin");
+                    break;
                 case "--no-update-check":
                 case "-no-update-check":
                     o.NoUpdateCheck = true;
@@ -232,6 +265,17 @@ public sealed class Options
     {
         ProjectDir = projectDir;
         ProjectSpecified = true;
+    }
+
+    /** A free-text value, used by the plugin commands. */
+    private static string ReadValue(string[] args, ref int index, string name)
+    {
+        if (index + 1 >= args.Length)
+            throw new ArgumentException($"--{name} requires a value");
+        var value = args[++index].Trim().Trim('"');
+        if (value.Length == 0)
+            throw new ArgumentException($"--{name} requires a value");
+        return value;
     }
 
     private static int ReadInt(string[] args, ref int index, string name, int min, int max)
@@ -335,18 +379,19 @@ public sealed class Options
         if (index + 1 >= args.Length)
             throw new ArgumentException("--dsh-cli requires the path of the harness entry point (bin.js)");
         var value = args[++index].Trim().Trim('"');
+        if (value.Length == 0)
+            throw new ArgumentException("--dsh-cli requires the path of the harness entry point (bin.js)");
 
-        string full;
         try
         {
-            full = Path.GetFullPath(value);
+            // The path is accepted even when nothing is there: "you told me where
+            // it is and it is missing" is a state worth reporting (and repairing),
+            // not an argument error.
+            return Path.GetFullPath(value);
         }
         catch (Exception ex)
         {
             throw new ArgumentException($"--dsh-cli is not a valid path: '{value}' ({ex.Message})");
         }
-        if (!File.Exists(full))
-            throw new ArgumentException($"--dsh-cli file does not exist: {full}");
-        return full;
     }
 }

@@ -904,38 +904,41 @@ public sealed class MainForm : Form, IBridgeHost
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(pluginName))
-                return Task.FromResult<object>(new { ok = false, error = "no plugin was named" });
-
-            var moduleDir = Path.Combine(HarnessProfile.ModulesDir(_home), pluginName);
-            var rowIds = HarnessProfile.ReadPatchRowIds(moduleDir);
-            if (rowIds.Count == 0)
-            {
-                return Task.FromResult<object>(new
-                {
-                    ok = false,
-                    error = $"{pluginName} mounts no row of its own, so it cannot be switched off here",
-                });
-            }
-
-            foreach (var rowId in rowIds)
-            {
-                var error = HarnessProfile.SetRowDisabled(_home, rowId, !enabled);
-                if (error != null) return Task.FromResult<object>(new { ok = false, error });
-            }
-
-            Log.Info($"{pluginName} {(enabled ? "enabled" : "disabled")} in profile {HarnessProfile.Name}");
-            return Task.FromResult<object>(new
-            {
-                ok = true,
-                restartRequired = true,
-                note = "Restart the app to apply the change.",
-            });
+            // One implementation, shared with --enable-plugin / --disable-plugin.
+            var result = PluginManager.SetEnabled(_home, pluginName, enabled);
+            return Task.FromResult<object>(result.Ok
+                ? new { ok = true, restartRequired = true, note = "Restart the app to apply the change." }
+                : new { ok = false, error = result.Error });
         }
         catch (Exception ex)
         {
             return Task.FromResult<object>(new { ok = false, error = ex.Message });
         }
+    }
+
+    /** Installing a plugin runs pnpm, so it happens off the UI thread. */
+    public async Task<object> InstallPluginAsync(string spec)
+    {
+        if (string.IsNullOrWhiteSpace(spec)) return new { ok = false, error = "no package was named" };
+
+        var tools = Tools.Discover();
+        var result = await Task.Run(() => PluginManager.Add(_home, tools, spec)).ConfigureAwait(true);
+        PushBridgeState();
+        return result.Ok
+            ? new { ok = true, restartRequired = true, output = result.Output, note = $"Installed {spec}. Restart the app to load it." }
+            : new { ok = false, error = result.Error };
+    }
+
+    public async Task<object> RemovePluginAsync(string pluginName)
+    {
+        if (string.IsNullOrWhiteSpace(pluginName)) return new { ok = false, error = "no plugin was named" };
+
+        var tools = Tools.Discover();
+        var result = await Task.Run(() => PluginManager.Remove(_home, tools, pluginName)).ConfigureAwait(true);
+        PushBridgeState();
+        return result.Ok
+            ? new { ok = true, note = $"Removed {pluginName}. Restart the app to unload it." }
+            : new { ok = false, error = result.Error };
     }
 
     public void OpenNativeWindow() => ShowUpdates();

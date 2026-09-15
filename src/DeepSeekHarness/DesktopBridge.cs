@@ -23,6 +23,12 @@ public interface IBridgeHost
     Task<object> SetPolicyAsync(bool checkOnLaunch);
     Task<object> SetPluginEnabledAsync(string name, bool enabled);
 
+    /// <summary>Installs a plugin package into this home's profile.</summary>
+    Task<object> InstallPluginAsync(string spec);
+
+    /// <summary>Removes one.</summary>
+    Task<object> RemovePluginAsync(string name);
+
     /// <summary>Brings the native updates window forward.</summary>
     void OpenNativeWindow();
 }
@@ -123,6 +129,8 @@ public static class DesktopBridge
             harnessInstall: function () { return send('harnessInstall'); },
             setPolicy: function (params) { return send('setPolicy', params); },
             setPluginEnabled: function (params) { return send('setPluginEnabled', params); },
+            installPlugin: function (params) { return send('installPlugin', params, 900000); },
+            removePlugin: function (params) { return send('removePlugin', params, 900000); },
             openNative: function () { return send('open'); },
             subscribe: function (listener) {
               stateListeners.add(listener);
@@ -193,6 +201,8 @@ public static class DesktopBridge
                 "setPluginEnabled" => await host
                     .SetPluginEnabledAsync(StringParam(request.Params, "name"), BoolParam(request.Params, "enabled"))
                     .ConfigureAwait(false),
+                "installPlugin" => await host.InstallPluginAsync(StringParam(request.Params, "spec")).ConfigureAwait(false),
+                "removePlugin" => await host.RemovePluginAsync(StringParam(request.Params, "name")).ConfigureAwait(false),
                 "open" => Open(host),
                 _ => throw new InvalidOperationException($"unknown bridge method '{request.Method}'"),
             };
@@ -386,6 +396,18 @@ public static class DesktopBridge
         public Task<object> SetPluginEnabledAsync(string name, bool enabled)
         {
             LastPlugin = (name, enabled);
+            return Task.FromResult<object>(new { ok = true });
+        }
+
+        public Task<object> InstallPluginAsync(string spec)
+        {
+            Calls.Add("installPlugin:" + spec);
+            return Task.FromResult<object>(new { ok = true });
+        }
+
+        public Task<object> RemovePluginAsync(string name)
+        {
+            Calls.Add("removePlugin:" + name);
             return Task.FromResult<object>(new { ok = true });
         }
 

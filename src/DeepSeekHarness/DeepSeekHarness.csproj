@@ -40,6 +40,14 @@
     <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\index.js" LogicalName="DShNative.plugin.index.js" />
     <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\package.json" LogicalName="DShNative.plugin.package.json" />
     <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\cordis.patch.yml" LogicalName="DShNative.plugin.cordis.patch.yml" />
+    <!--
+      The pnpm runtime used to install third-party plugins. It is fetched by
+      build.ps1 into assets\pnpm (git-ignored, ~12 MB) and embedded when present;
+      a build without it still works, because the app fetches the runtime with
+      npm the first time a plugin is installed.
+    -->
+    <EmbeddedResource Include="..\..\assets\pnpm\pnpm.mjs" LogicalName="DShNative.pnpm.pnpm.mjs" Condition="Exists('..\..\assets\pnpm\pnpm.mjs')" />
+    <EmbeddedResource Include="..\..\assets\pnpm\worker.js" LogicalName="DShNative.pnpm.worker.js" Condition="Exists('..\..\assets\pnpm\worker.js')" />
   </ItemGroup>
 
 </Project>

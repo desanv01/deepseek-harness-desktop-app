@@ -389,11 +389,14 @@ window.__ModuleLoader__.load({
 		function PluginList() {
 			const state = useBridgeState()
 			const action = useAction()
+			const [spec, setSpec] = useState('')
 			const plugins = (state && state.plugins) || null
 
 			if (!plugins) {
 				return h('div', { style: { opacity: 0.7, fontSize: '12.5px' } }, 'Reading the profile ...')
 			}
+
+			const canManage = plugins.canManage !== false
 
 			return h(
 				'div',
@@ -425,7 +428,7 @@ window.__ModuleLoader__.load({
 										entry.enabled ? '' : ' — disabled',
 									),
 								),
-								entry.builtIn
+								entry.builtIn || !canManage
 									? null
 									: h(Button, {
 											children: entry.enabled ? 'Disable' : 'Enable',
@@ -435,8 +438,54 @@ window.__ModuleLoader__.load({
 													enabled: !entry.enabled,
 												}),
 										}),
+								entry.builtIn || !canManage
+									? null
+									: h(Button, {
+											children: 'Remove',
+											onClick: () => action.run('removePlugin', 'Removing ' + entry.name + ' ...', { name: entry.name }),
+											busy: action.busy === 'Removing ' + entry.name + ' ...' ? 'Removing ...' : null,
+										}),
 							),
 						),
+
+				canManage
+					? h(
+							'div',
+							{ style: { display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' } },
+							h('input', {
+								type: 'text',
+								value: spec,
+								placeholder: 'npm name, git spec, or a local folder',
+								onChange: (event) => setSpec(event.target.value),
+								style: Object.assign({}, surface, {
+									flex: 1,
+									minWidth: 0,
+									padding: '7px 10px',
+									background: 'rgba(127,127,127,0.06)',
+									color: 'inherit',
+									font: 'inherit',
+									fontSize: '12.5px',
+								}),
+							}),
+							h(Button, {
+								primary: true,
+								disabled: spec.trim().length === 0,
+								busy: action.busy === 'Installing ...' ? 'Installing ...' : null,
+								onClick: () => {
+									const value = spec.trim()
+									if (!value) return
+									action.run('installPlugin', 'Installing ...', { spec: value }).then((result) => {
+										if (result && result.ok) setSpec('')
+									})
+								},
+								children: 'Install plugin',
+							}),
+						)
+					: null,
+
+				action.busy
+					? h('div', { style: { marginTop: '8px', fontSize: '12px', opacity: 0.7 } }, action.busy)
+					: null,
 				action.error ? h(Status, { text: action.error, bad: true }) : null,
 			)
 		}

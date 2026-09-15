@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-desktop-updates",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Updates and plugin management for the DeepSeek Harness desktop app: a sidebar entry beside Settings and a Settings section, driven by the app's native bridge.",
