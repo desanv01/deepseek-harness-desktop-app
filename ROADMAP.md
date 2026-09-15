@@ -5,7 +5,7 @@ The app is feature-complete for its core promise: launch, project-scoped window,
 | Item | State | Notes |
 | --- | --- | --- |
 | 1. GitHub Actions | **done** | `ci.yml` builds and smoke-tests on every push; `release.yml` publishes a tagged build with `SHA256SUMS` |
-| 2. Unit tests | open | The pure logic is where a regression is silent; CI has no test step yet |
+| 2. Unit tests | **partly done** | `tools/smoke-test.ps1` covers harness-CLI discovery, repair and install safety behaviourally in CI; the pure-logic unit tests below are still open |
 | 3. Signed self-update | **partly done** | Detect, download, checksum-verify, stage, apply, roll back, and notify all ship; Authenticode signing and `WinVerifyTrust` do not |
 
 What follows is the original plan, kept for the parts that are still open.

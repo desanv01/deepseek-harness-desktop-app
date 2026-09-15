@@ -74,3 +74,20 @@ jobs:
           if ($code -ne 2) { throw "an unknown flag should exit 2, got $code" }
 
           Write-Host 'command line behaved as documented'
+
+      - name: Smoke test the harness CLI handling
+        shell: pwsh
+        run: |
+          # Fixtures, not this machine: a fake npm prefix and a fake npm that can
+          # succeed, fail, or leave a half-installed package behind.
+          $work = Join-Path $env:RUNNER_TEMP 'dsh-smoke'
+          ./tools/smoke-test.ps1 -Exe ./dist/DeepSeekHarness.exe -WorkRoot $work
+
+      - name: Upload the smoke test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-logs
+          path: |
+            ${{ runner.temp }}/dsh-smoke/*.txt
+          if-no-files-found: ignore

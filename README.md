@@ -50,6 +50,8 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Tray icon** — present for the whole window lifetime: hide the window to the tray, bring it back, open the project folder or the log directory, see the installed harness version, check for a newer harness, and stop the server.
 - **Ordinary window behavior** — minimizing minimizes to the taskbar like any other window; hiding to the tray is an explicit tray-menu action, and closing the window still stops the server.
 - **Harness version aware** — on launch it reads the npm `latest` and `alpha` dist-tags once and shows the result in the tray. The check is read-only; installing is a deliberate click that verifies the CLI before the window restarts.
+- **Finds the harness wherever npm put it** — the CLI is located the way a shell locates it: the `dsh` shim on `PATH` is read for the entry point it runs, the package's own `package.json` `bin` is honoured, and a global prefix outside `PATH` is found through `npm prefix -g`. A custom npm prefix, a pnpm-style store, or a package layout change therefore still resolves.
+- **Repairs a broken harness install** — an interrupted `npm install -g` leaves the package directory behind without the files the CLI needs. The app says exactly that instead of claiming the harness is not installed, and offers to install it; `--update` does the same without asking, and `--repair-harness` does it from a script. Before npm touches a working install, the app moves it aside and puts it back if the result does not validate, so a failed update never costs you a working harness.
 - **Update aware** — on launch it also asks GitHub for a newer build of this app, caches the answer for six hours, and announces one when it exists: a tray notification, a line in the tray menu, a pill inside the harness page, and the version in the window title. Detection reads release metadata only.
 - **In-app updates** — a "Check for updates" window covers both tracks. The desktop-app tab downloads the published build, checks it against the release's `SHA256SUMS`, and installs it on demand: the server stops, a helper swaps the executable once the app has exited, and the app comes back on the new build. A build that does not start is rolled back automatically. The harness tab installs a newer `@deepseek-ai/dsh` from npm.
 - **Staged, never in place** — the running executable is never overwritten while it runs. The download is verified before the swap, the previous build is kept as `<exe>.old` until the new one has stayed up, and a checksum mismatch discards the download outright.
@@ -133,6 +135,15 @@ A missing folder exits with code `2` and a clear message rather than a NuGet sta
 
 Open `DeepSeekHarness.sln` in Visual Studio and use the `PortableFolder` or `PortableSingleFile` publish profile if you prefer the Publish dialog.
 
+### Smoke test
+
+```powershell
+dotnet build -c Release -r win-x64            # or .\build.ps1
+.\tools\smoke-test.ps1                        # exercises .\dist\DeepSeekHarness.exe
+```
+
+`tools\smoke-test.ps1` is a behavioural suite for the part of the app that depends on the machine: it builds throwaway fixtures — a fake npm global prefix with a shim and a package, and a fake `npm` that can succeed, fail, or leave a half-written package behind — then asserts what the app reports and what it does to the installation. It needs no network, no real harness install, and no real npm, and CI runs it on every push.
+
 ### Cutting a release
 
 `<Version>` in `DeepSeekHarness.csproj` is the release date in `yyyy.MM.dd` form, and the release tag is `v<Version>`. The updater compares the two as dates, so they have to agree — and the workflow refuses to publish when they do not.
@@ -158,7 +169,9 @@ DeepSeekHarness.exe                              normal launch (own server, OS-p
 DeepSeekHarness.exe --project C:\work\my-repo    open that workspace in the window
 DeepSeekHarness.exe --dsh-home C:\dsh-home       use a specific harness home
 DeepSeekHarness.exe --port 8080                  pin the port instead of letting the OS pick
-DeepSeekHarness.exe --update                     update the global dsh first (opt-in)
+DeepSeekHarness.exe --update                     update the global dsh first (opt-in, also repairs a broken one)
+DeepSeekHarness.exe --repair-harness             install or repair the global @deepseek-ai/dsh, then exit
+DeepSeekHarness.exe --dsh-cli <path\bin.js>      use this harness entry point instead of searching for one
 DeepSeekHarness.exe --self-test                  environment report and exit
 DeepSeekHarness.exe --check-harness              report installed vs published harness versions
 DeepSeekHarness.exe --check-updates              report app + harness update state (exit 10 = update available)
@@ -178,8 +191,10 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--port <n>` | `0` (OS picks a free port) | Pin the listen port; the real port is read from the ready line either way |
 | `--address <host>` | `127.0.0.1` | Bind address for the managed server |
 | `--ready-timeout <sec>` | `240` | How long to wait for the server's ready line |
-| `--update` | off | Run `npm install -g @deepseek-ai/dsh@latest` before boot |
+| `--update` | off | Run `npm install -g @deepseek-ai/dsh@latest` before boot; also installs or repairs a missing, half-installed CLI |
 | `--no-update` | on | Explicit alias that keeps updates off |
+| `--repair-harness` | off | Install or repair the global `@deepseek-ai/dsh`, then exit (`0` usable, `1` still broken, `10` node or npm missing) |
+| `--dsh-cli <path>` | auto-detected | Harness entry point to use; for an install the search cannot see |
 | `--no-window` | off | Owned-mode boot test with no UI |
 | `--self-test` | off | Print an environment report and exit |
 | `--check-harness` | off | Print installed vs published harness versions and exit (`0` current, `10` update available) |
@@ -255,13 +270,17 @@ assets/                    # official DeepSeek artwork (regenerated by tools\upd
 screenshots/               # README images
 build.ps1                  # dev / portable-folder / single-file builds
 build_portable.ps1         # one self-contained exe + zip
+tools/smoke-test.ps1       # behavioural suite: CLI discovery, repair, install safety
+tools/update-icons.ps1     # regenerates the embedded DeepSeek artwork
 ```
 
 ## Troubleshooting
 
 - **Window shows "Starting …" for a long time** — run `DeepSeekHarness.exe --self-test`, raise `--ready-timeout`, and read the newest `server-*.out.log`.
 - **`WebView2 failed to initialize`** — the WebView2 Runtime is missing; the window shows the official install link.
-- **`@deepseek-ai/dsh is not installed globally`** — run `npm install -g @deepseek-ai/dsh`, or launch with `--update`.
+- **`@deepseek-ai/dsh is not installed globally`** — nothing that looks like the harness was found. The app offers to install it; from a script, `DeepSeekHarness.exe --repair-harness` or `--update` does the same, and both print where they looked.
+- **`@deepseek-ai/dsh is installed but incomplete`** — the package directory is there without the files the CLI needs, which is what an interrupted `npm install -g` leaves behind. The dialog names the missing file; accepting the install (or `--repair-harness`) fixes it. Installing over a working CLI keeps a copy until the replacement validates, so this cannot strand you.
+- **`dsh` works in a terminal but the app cannot find it** — the app reads the `dsh` shim on `PATH`, the package's `package.json` `bin`, `%APPDATA%\npm`, and `npm prefix -g`. If your install is somewhere none of those see, `--dsh-cli <path\to\bin.js>` names it directly; `--self-test` prints the search.
 - **"Another instance owns this home"** — a second window is already serving the same `DSH_HOME`. A normal launch would just bring that window forward; this message means the owner is alive but its server did not answer, so close it (or run `--stop`) and retry.
 - **The project picker appears every launch** — `settings.json` could not be written (check permissions on `%LOCALAPPDATA%\DeepSeekHarness`), or the remembered folder was moved or deleted. Pick the project again to re-record it.
 - **Port already in use** — only possible when you pin one with `--port`; the default `--port 0` cannot conflict.
@@ -279,7 +298,8 @@ Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek
 - `--stop`, invalid `--port`, unknown flag, missing `--project` — correct exit codes;
 - update check against the live repository — the redirect endpoint reports the newest tag even while the anonymous API limit is exhausted, and `--check-updates` exits `10` when a newer build exists and `0` when the running one is newest;
 - update install against a local release fixture — download, `SHA256SUMS` verification, staged apply, restart; a tampered checksum is refused and the download discarded; a build that exits immediately is rolled back to the previous one;
-- the injected update pill — exercised against a fake DOM (one element, posts on click, hides, survives a missing `document.body`).
+- the injected update pill — exercised against a fake DOM (one element, posts on click, hides, survives a missing `document.body`);
+- harness CLI handling — `tools\smoke-test.ps1` covers discovery through a shim and through `package.json`, a half-installed package reported as incomplete, `--repair-harness` installing a missing CLI, a failed install restoring the previous one, and a successful install replacing it (16 assertions, no network needed).
 
 Known limitations:
 
