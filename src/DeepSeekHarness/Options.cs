@@ -26,6 +26,15 @@ public sealed class Options
     public bool SelfTest { get; private set; }
     public bool Stop { get; private set; }
     public bool CheckHarness { get; private set; }
+
+    /** --check-updates: report app + harness update state and exit. */
+    public bool CheckUpdates { get; private set; }
+
+    /** --no-update-check: this launch makes no update requests at all. */
+    public bool NoUpdateCheck { get; private set; }
+
+    /** Release feed to read instead of the GitHub API (file:// or a URL). */
+    public string? UpdateFeedUrl { get; private set; }
     public int ReadyTimeoutSec { get; private set; } = 240;
 
     /** True when the flag was named on the command line, so settings must not override it. */
@@ -33,6 +42,15 @@ public sealed class Options
     public bool HomeSpecified { get; private set; }
     public bool PortSpecified { get; private set; }
     public bool UpdateSpecified { get; private set; }
+
+    /** True when the feed or the check policy was named on the command line. */
+    public bool UpdateCheckSpecified { get; private set; }
+
+    /** Whether a launch asks the release feed for a newer build (settings can turn it off). */
+    public bool CheckForUpdatesOnLaunch { get; private set; } = true;
+
+    /** The release feed and launch policy, in the shape the window wants them. */
+    public UpdatePolicy UpdatePolicy => new(CheckForUpdatesOnLaunch && !NoUpdateCheck, UpdateFeedUrl);
 
     /** The home to use after settings fall back to the app default. */
     public string ResolveHome() => DshHome ?? AppPaths.DefaultHome;
@@ -107,6 +125,20 @@ public sealed class Options
                 case "-check-harness":
                     o.CheckHarness = true;
                     break;
+                case "--check-updates":
+                case "-check-updates":
+                    o.CheckUpdates = true;
+                    break;
+                case "--no-update-check":
+                case "-no-update-check":
+                    o.NoUpdateCheck = true;
+                    o.UpdateCheckSpecified = true;
+                    break;
+                case "--update-feed":
+                case "-update-feed":
+                    o.UpdateFeedUrl = ReadFeed(args, ref i);
+                    o.UpdateCheckSpecified = true;
+                    break;
                 case "--stop":
                 case "-stop":
                     o.Stop = true;
@@ -125,6 +157,11 @@ public sealed class Options
         if (!HomeSpecified && !string.IsNullOrWhiteSpace(settings.DshHome)) DshHome = settings.DshHome;
         if (!PortSpecified) Port = settings.Port;
         if (!UpdateSpecified) Update = settings.Update;
+        CheckForUpdatesOnLaunch = settings.CheckForUpdates;
+        if (!UpdateCheckSpecified && !string.IsNullOrWhiteSpace(settings.UpdateFeedUrl))
+        {
+            UpdateFeedUrl = settings.UpdateFeedUrl;
+        }
     }
 
     /** Records a project chosen interactively, so later stages treat it as explicit. */
@@ -195,6 +232,38 @@ public sealed class Options
         }
         if (File.Exists(full))
             throw new ArgumentException($"--dsh-home must be a directory, not a file: {full}");
+        return full;
+    }
+
+    /**
+     * The release feed to read instead of the GitHub API: an https URL, a
+     * file:// URL, or the path of a local release document.
+     */
+    private static string ReadFeed(string[] args, ref int index)
+    {
+        if (index + 1 >= args.Length)
+            throw new ArgumentException("--update-feed requires a URL or the path of a release JSON file");
+        var value = args[++index].Trim().Trim('"');
+        if (value.Length == 0)
+            throw new ArgumentException("--update-feed requires a URL or the path of a release JSON file");
+        if (value.Contains("://", StringComparison.Ordinal))
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out _))
+                throw new ArgumentException($"--update-feed is not a valid URL: '{value}'");
+            return value;
+        }
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(value);
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException($"--update-feed is not a valid path: '{value}' ({ex.Message})");
+        }
+        if (!File.Exists(full))
+            throw new ArgumentException($"--update-feed file does not exist: {full}");
         return full;
     }
 }

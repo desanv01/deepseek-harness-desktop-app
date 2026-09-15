@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -47,6 +48,24 @@ public static class AppPaths
 
     public static string LogsDir => Path.Combine(Root, "logs");
     public static string WebView2Data => Path.Combine(Root, "webview2");
+
+    /** Staged desktop-app updates: one folder per release tag. */
+    public static string UpdatesDir => Path.Combine(Root, "updates");
+
+    /** Cached answer of the last GitHub release check. */
+    public static string UpdateCheckCacheFile => Path.Combine(Root, "update-check.json");
+
+    /** The staged update a helper is about to swap in. */
+    public static string PendingUpdateFile => Path.Combine(UpdatesDir, "pending.json");
+
+    /** Where the staging area for one release tag lives. */
+    public static string UpdateStageDir(string tag)
+    {
+        var safe = new string((tag ?? "release")
+            .Where(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_')
+            .ToArray());
+        return Path.Combine(UpdatesDir, safe.Length == 0 ? "release" : safe);
+    }
 
     /** The dedicated harness home this app owns unless --dsh-home overrides it. */
     public static string DefaultHome => Path.Combine(Root, "home");

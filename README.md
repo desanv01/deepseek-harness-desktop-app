@@ -50,6 +50,7 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Tray icon** — present for the whole window lifetime: hide the window to the tray, bring it back, open the project folder or the log directory, see the installed harness version, check for a newer harness, and stop the server.
 - **Ordinary window behavior** — minimizing minimizes to the taskbar like any other window; hiding to the tray is an explicit tray-menu action, and closing the window still stops the server.
 - **Harness version aware** — on launch it reads the npm `latest` and `alpha` dist-tags once and shows the result in the tray. The check is read-only; installing is a deliberate click that verifies the CLI before the window restarts.
+- **Update aware** — on launch it also asks GitHub for a newer build of this app, caches the answer for six hours, and announces one when it exists: a tray notification, a line in the tray menu, and the version in the window title. Detection reads release metadata only; nothing is downloaded until you ask for it.
 - **Bounded logs** — `desktop.log` rotates at 4 MB and old server logs are pruned at startup.
 - **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.
 - **Opt-in updates** — `--update` runs `npm install -g @deepseek-ai/dsh@latest` behind a lock and validates the CLI before booting. Without the flag, a launch never mutates a working install.
@@ -140,6 +141,9 @@ DeepSeekHarness.exe --port 8080                  pin the port instead of letting
 DeepSeekHarness.exe --update                     update the global dsh first (opt-in)
 DeepSeekHarness.exe --self-test                  environment report and exit
 DeepSeekHarness.exe --check-harness              report installed vs published harness versions
+DeepSeekHarness.exe --check-updates              report app + harness update state (exit 10 = update available)
+DeepSeekHarness.exe --no-update-check            launch without asking the release feed anything
+DeepSeekHarness.exe --update-feed <url|file>     read the release feed from here instead of the GitHub API
 DeepSeekHarness.exe --stop                       stop the server this app started
 DeepSeekHarness.exe --no-window                  headless boot test: start, verify, stop
 ```
@@ -156,6 +160,9 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--no-window` | off | Owned-mode boot test with no UI |
 | `--self-test` | off | Print an environment report and exit |
 | `--check-harness` | off | Print installed vs published harness versions and exit (`0` current, `10` update available) |
+| `--check-updates` | off | Print the desktop-app and harness update state and exit (`0` current, `10` update available, `1` nothing checkable) |
+| `--no-update-check` | off | This launch never asks the release feed, and the tray still checks on demand |
+| `--update-feed <url\|file>` | GitHub API | Read the release feed from this URL or JSON file; a local path drives the update flow without a network |
 | `--stop` | off | Stop the managed server for the selected home (exit 1 when none was found) |
 
 Command-line flags always win over `settings.json`; anything not named on the command line falls back to the remembered value.
@@ -201,6 +208,9 @@ src/DeepSeekHarness/
 ├── NetProbe.cs            # endpoint identity probe (DSH bootstrap marker)
 ├── Tools.cs               # node/npm/dsh discovery and CLI validation
 ├── HarnessUpdate.cs       # npm dist-tag check: installed vs published harness
+├── AppInfo.cs             # this build's version, release repo, and asset naming
+├── AppUpdate.cs           # GitHub release check, version comparison, cached answer
+├── UpdateHttp.cs          # update transport: in-process TLS, Node fallback, file:// feeds
 ├── Updater.cs             # opt-in serialized npm update
 ├── AppPaths.cs            # %LOCALAPPDATA% layout, home keys, log pruning
 ├── MainForm.cs            # WebView2 window, theme measurement, tray handoff
@@ -269,7 +279,8 @@ The detailed gameplan for the remaining items — design, acceptance criteria, r
 
 - The app talks only to a loopback harness server; harness data stays in local files under `DSH_HOME`.
 - The harness access token is passed to the embedded browser in the URL and is never logged by the app.
-- The app performs no telemetry and makes no outbound requests other than an optional npm update and the GitHub release check.
+- The app performs no telemetry. Its outbound requests are the optional npm update, the npm dist-tag read, and the GitHub release check — all of which can be disabled with `--no-update-check` (the npm update stays opt-in through `--update`).
+- Update detection reads public release metadata. Nothing is downloaded or replaced without an explicit action.
 - `--update` mutates the global `@deepseek-ai/dsh` installation; use it deliberately.
 - Report sensitive issues through GitHub's private security advisory flow rather than a public issue.
 

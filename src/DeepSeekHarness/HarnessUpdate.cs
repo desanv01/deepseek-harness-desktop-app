@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -20,7 +19,6 @@ public sealed record HarnessVersions(string? Installed, string? Latest, string? 
 public static class HarnessUpdate
 {
     private const string RegistryUrl = "https://registry.npmjs.org/@deepseek-ai%2Fdsh";
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     /** Channel the app follows. The plugin home needs the conservative one. */
     public const string DefaultChannel = "latest";
@@ -29,16 +27,14 @@ public static class HarnessUpdate
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, RegistryUrl);
-            request.Headers.TryAddWithoutValidation("Accept", "application/json");
-            using var response = await Http.SendAsync(request).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
+            var payload = await UpdateHttp.GetStringAsync(RegistryUrl).ConfigureAwait(false);
+            if (payload == null)
             {
-                Log.Warn($"harness update check failed: http {(int)response.StatusCode}");
+                Log.Warn("harness update check failed: the npm registry could not be read");
                 return null;
             }
 
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            using var document = JsonDocument.Parse(payload);
             if (!document.RootElement.TryGetProperty("dist-tags", out var tags))
             {
                 Log.Warn("harness update check failed: the registry response had no dist-tags");

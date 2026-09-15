@@ -34,6 +34,7 @@ internal static class Program
                      + (AppPaths.IsPortable ? $" (from {AppPaths.RootEnvVar})" : ""));
             if (opts.SelfTest) return SelfTest.Run(opts);
             if (opts.CheckHarness) return HarnessUpdate.RunCheck();
+            if (opts.CheckUpdates) return UpdateCli.Run(opts);
             if (opts.Stop) return Orchestrator.RunStop(opts);
             return Orchestrator.Run(opts);
         }

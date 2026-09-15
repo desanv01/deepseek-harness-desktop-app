@@ -159,7 +159,7 @@ public static class Orchestrator
 
         try
         {
-            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project);
+            using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.UpdatePolicy);
             onFocus = form.FocusFromSignal;
             signal?.Start();
             Application.Run(form);

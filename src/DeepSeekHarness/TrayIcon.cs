@@ -10,6 +10,7 @@ public sealed class TrayIcon : IDisposable
 {
     private readonly NotifyIcon _icon;
     private readonly ToolStripMenuItem _harnessItem;
+    private readonly ToolStripMenuItem _appItem;
     private bool _hintShown;
 
     public TrayIcon(
@@ -19,7 +20,9 @@ public sealed class TrayIcon : IDisposable
         Action onHide,
         Action onExit,
         Action onCheckHarness,
-        string harnessStatus)
+        Action onCheckUpdates,
+        string harnessStatus,
+        string appStatus)
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open window", null, (_, _) => onOpen());
@@ -32,6 +35,12 @@ public sealed class TrayIcon : IDisposable
         _harnessItem = new ToolStripMenuItem(harnessStatus) { Enabled = false };
         menu.Items.Add(_harnessItem);
         menu.Items.Add("Check for harness update ...", null, (_, _) => onCheckHarness());
+
+        // Shows the installed app version and whether a newer build exists.
+        _appItem = new ToolStripMenuItem(appStatus) { Enabled = false };
+        menu.Items.Add(_appItem);
+        menu.Items.Add("Check for updates ...", null, (_, _) => onCheckUpdates());
+
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Stop server and exit", null, (_, _) => onExit());
 
@@ -49,6 +58,25 @@ public sealed class TrayIcon : IDisposable
     public void SetHarnessStatus(string text)
     {
         try { _harnessItem.Text = text; } catch { }
+    }
+
+    /** Updates the desktop-app version line. Call on the UI thread. */
+    public void SetAppStatus(string text)
+    {
+        try { _appItem.Text = text; } catch { }
+    }
+
+    /** Announces something worth interrupting for; used when an update is found. */
+    public void AnnounceUpdate(string title, string text)
+    {
+        try
+        {
+            _icon.ShowBalloonTip(8000, title, text, ToolTipIcon.Warning);
+        }
+        catch
+        {
+            // balloon tips can be disabled by policy; the menu lines remain
+        }
     }
 
     /** Tooltip under the tray icon; also shows the harness version. */

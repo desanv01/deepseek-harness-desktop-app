@@ -9,6 +9,9 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace DShNative;
 
+/** What the window is allowed to ask the release feed, and where that feed is. */
+public sealed record UpdatePolicy(bool CheckOnLaunch, string? FeedUrl);
+
 /** WebView2 window for the harness UI; icon and title bar follow the theme. */
 public sealed class MainForm : Form
 {
@@ -23,6 +26,8 @@ public sealed class MainForm : Form
     private readonly string _url;
     private readonly string _userDataDir;
     private readonly string _projectDir;
+    private readonly UpdatePolicy _policy;
+    private readonly string _baseTitle;
     private readonly Label _status;
     private WebView2? _web;
     private Color? _pageBg; // measured from the rendered page once loaded
@@ -31,12 +36,17 @@ public sealed class MainForm : Form
     private string _harnessStatus = "Harness: checking ...";
     private HarnessVersions? _harnessVersions;
     private bool _harnessCheckRunning;
+    private string _appUpdateStatus = "App: checking ...";
+    private AppUpdateInfo? _appUpdate;
+    private bool _appUpdateCheckRunning;
+    private string? _announcedTag;
 
-    public MainForm(string url, string userDataDir, string projectDir)
+    public MainForm(string url, string userDataDir, string projectDir, UpdatePolicy? policy = null)
     {
         _url = url;
         _userDataDir = userDataDir;
         _projectDir = projectDir;
+        _policy = policy ?? new UpdatePolicy(CheckOnLaunch: true, FeedUrl: null);
 
         var projectName = "";
         try
@@ -44,9 +54,10 @@ public sealed class MainForm : Form
             projectName = new DirectoryInfo(projectDir).Name;
         }
         catch { }
-        Text = projectName.Length > 0
+        _baseTitle = projectName.Length > 0
             ? "DeepSeek Harness - " + projectName
             : "DeepSeek Harness";
+        Text = _baseTitle;
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(1280, 820);
         MinimumSize = new Size(860, 560);
@@ -84,6 +95,7 @@ public sealed class MainForm : Form
     {
         EnsureTray();
         _ = CheckHarnessAsync();
+        _ = CheckAppUpdateAsync(force: false);
     }
 
     /** Brings the window forward when a later launch asks this instance to focus. */
@@ -112,8 +124,11 @@ public sealed class MainForm : Form
                 onHide: HideToTray,
                 onExit: Close,
                 onCheckHarness: () => _ = OnCheckHarnessAsync(),
-                harnessStatus: _harnessStatus);
+                onCheckUpdates: () => _ = OnCheckUpdatesAsync(),
+                harnessStatus: _harnessStatus,
+                appStatus: _appUpdateStatus);
             _tray.SetHarnessStatus(_harnessStatus);
+            _tray.SetAppStatus(_appUpdateStatus);
         }
         catch (Exception ex)
         {
@@ -250,9 +265,154 @@ public sealed class MainForm : Form
         if (restart == DialogResult.Yes) RestartApp();
     }
 
-    /** Starts a fresh instance; the job object stops this one's server on exit. */
-    private void RestartApp()
+    /**
+     * Reads the release feed once per window and records the result for the
+     * tray and the window title. Read-only: nothing is downloaded or replaced
+     * here - installing is a deliberate action in the Updates window.
+     */
+    private async Task CheckAppUpdateAsync(bool force)
     {
+        if (!force && !_policy.CheckOnLaunch) return;
+        if (_appUpdateCheckRunning) return;
+        _appUpdateCheckRunning = true;
+        try
+        {
+            var info = await AppUpdate.CheckAsync(force, _policy.FeedUrl).ConfigureAwait(true);
+            _appUpdate = info;
+            _appUpdateStatus = info.StatusLine;
+            ApplyUpdateState();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("app update check failed: " + ex.Message);
+        }
+        finally
+        {
+            _appUpdateCheckRunning = false;
+        }
+    }
+
+    /** Pushes the current update state into the tray, its tooltip, and the title. */
+    private void ApplyUpdateState()
+    {
+        if (IsDisposed) return;
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                if (IsDisposed) return;
+                var info = _appUpdate;
+                var available = info is { UpdateAvailable: true, Latest: not null };
+
+                _tray?.SetAppStatus(_appUpdateStatus);
+                _tray?.SetTooltip(TooltipText());
+                Text = available
+                    ? $"{_baseTitle} - update {info!.Latest!.Version} available"
+                    : _baseTitle;
+
+                if (available && !string.Equals(_announcedTag, info!.Latest!.Tag, StringComparison.Ordinal))
+                {
+                    _announcedTag = info.Latest.Tag;
+                    Log.Info($"a newer build is available: {info.Latest.Tag} (running {info.Installed})");
+                    _tray?.AnnounceUpdate(
+                        $"DeepSeek Harness {info.Latest.Version} is available",
+                        $"You are running {info.Installed}. Open the tray menu and choose "
+                        + "\"Check for updates\" to review and install it.");
+                }
+            }));
+        }
+        catch
+        {
+            // the window is closing; the tray is going away with it
+        }
+    }
+
+    private string TooltipText()
+    {
+        var text = "DeepSeek Harness - " + _harnessStatus;
+        if (_appUpdate is { UpdateAvailable: true, Latest: not null })
+            text += $" - update {_appUpdate.Latest.Version} available";
+        return text;
+    }
+
+    /** Tray action: refresh both update checks and report what was found. */
+    private async Task OnCheckUpdatesAsync()
+    {
+        if (_appUpdateCheckRunning) return;
+        await CheckAppUpdateAsync(force: true);
+
+        var installed = Tools.Discover().DshVersion;
+        var harness = await HarnessUpdate.QueryAsync(installed).ConfigureAwait(true);
+        _harnessVersions = harness;
+        if (harness != null)
+        {
+            _harnessStatus = harness.Available == null
+                ? $"Harness v{harness.Installed} (up to date)"
+                : $"Harness v{harness.Installed} -> {harness.Available} available";
+            ApplyHarnessStatus();
+        }
+
+        var info = _appUpdate;
+        var lines = new List<string> { $"Desktop app: installed {AppInfo.Version}" };
+        if (info == null || info.Error != null)
+        {
+            lines.Add("  the release feed could not be read: " + (info?.Error ?? "unknown error"));
+        }
+        else if (info.Latest == null)
+        {
+            lines.Add("  no published release was found");
+        }
+        else if (!info.UpdateAvailable)
+        {
+            lines.Add($"  {info.Latest.Version} is the newest published build");
+        }
+        else
+        {
+            lines.Add($"  {info.Latest.Version} is available - {info.Latest.Describe()}");
+            var notes = info.Latest.Notes.Trim();
+            if (notes.Length > 0)
+            {
+                var firstLine = notes.ReplaceLineEndings("\n").Split('\n')[0].Trim();
+                if (firstLine.Length > 0) lines.Add("  " + firstLine);
+            }
+        }
+
+        lines.Add("");
+        lines.Add($"Harness: installed {installed ?? "unknown"}");
+        lines.Add(harness == null
+            ? "  the npm registry could not be read"
+            : harness.Available == null
+                ? $"  {harness.Latest ?? "?"} is the newest on the {HarnessUpdate.DefaultChannel} channel"
+                : $"  {harness.Available} is available on npm");
+
+        var updateAvailable = info is { UpdateAvailable: true, Latest: not null };
+        var openPage = updateAvailable && MessageBox.Show(this,
+            string.Join(Environment.NewLine, lines) + Environment.NewLine + Environment.NewLine
+            + "Open the release page in your browser?",
+            "Check for updates", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes;
+
+        if (openPage) OpenUrl(info!.Latest!.HtmlUrl);
+    }
+
+    /** Opens a URL in the default browser; failures are logged, never thrown. */
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"could not open {url}: {ex.Message}");
+        }
+    }
+
+    /** Starts a fresh instance; the job object stops this one's server on exit. */
+    private void RestartApp()    {
         try
         {
             var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;

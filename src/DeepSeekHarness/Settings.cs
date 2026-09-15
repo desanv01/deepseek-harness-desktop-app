@@ -22,6 +22,15 @@ public sealed class AppSettings
     /** Whether the npm update runs on launch. */
     public bool Update { get; set; }
 
+    /** Whether a launch asks GitHub for a newer build of this app (default: yes). */
+    public bool CheckForUpdates { get; set; } = true;
+
+    /**
+     * Release feed to read instead of the GitHub API. Only useful for testing
+     * (a file:// fixture) or for a fork that publishes its own builds.
+     */
+    public string? UpdateFeedUrl { get; set; }
+
     /** Most recently opened projects, newest first. */
     public List<string> RecentProjects { get; set; } = new();
 
