@@ -6,7 +6,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-
 namespace DShNative;
 
 /** One file published with a release. */
@@ -468,5 +467,80 @@ public static class UpdateCli
     {
         var line = (text ?? "").ReplaceLineEndings("\n").Split('\n').FirstOrDefault(l => l.Trim().Length > 0);
         return string.IsNullOrWhiteSpace(line) ? "(no release notes)" : line.Trim().TrimEnd('*', '#').Trim();
+    }
+
+    /**
+     * --install-update: download, verify and stage the newest release without a
+     * window, so the whole update path can be exercised by a script. With
+     * --apply-now it also hands over to the helper, which swaps the files once
+     * this process is gone and relaunches the new build.
+     */
+    public static int RunInstall(Options o)
+    {
+        Console.WriteLine("== DeepSeek Harness desktop update install ==");
+        var info = AppUpdate.CheckAsync(force: true, feedOverride: o.UpdateFeedUrl).GetAwaiter().GetResult();
+        Console.WriteLine($"installed : {info.Installed}");
+
+        if (info.Error != null)
+        {
+            Console.Error.WriteLine("update check failed: " + info.Error);
+            return 1;
+        }
+        if (info.Latest == null)
+        {
+            Console.Error.WriteLine("no published release was found");
+            return 1;
+        }
+        if (!info.UpdateAvailable)
+        {
+            Console.WriteLine($"{info.Latest.Version} is the newest published build; nothing to install");
+            return 0;
+        }
+
+        Console.WriteLine($"release   : {info.Latest.Tag} - {info.Latest.Describe()}");
+        Console.WriteLine($"asset     : {UpdateInstaller.ChooseAsset(info.Latest)?.Name ?? "(none published)"}");
+        Console.WriteLine("downloading ...");
+
+        var progress = new Progress<UpdateProgress>(p =>
+        {
+            if (p.Total > 0)
+            {
+                Console.WriteLine($"  {p.Phase}: {p.Received}/{p.Total} bytes ({p.Percent}%)");
+            }
+            else
+            {
+                Console.WriteLine($"  {p.Phase}: {p.Received} bytes");
+            }
+        });
+
+        var (staged, error) = UpdateInstaller
+            .StageAsync(info.Latest, progress, CancellationToken.None)
+            .GetAwaiter().GetResult();
+        if (staged == null)
+        {
+            Console.Error.WriteLine("install failed: " + error);
+            return 1;
+        }
+
+        Console.WriteLine($"staged    : {staged.FilePath}");
+        Console.WriteLine($"bytes     : {staged.Bytes}");
+        Console.WriteLine($"sha256    : {staged.Sha256}");
+        Console.WriteLine($"verified  : {(staged.HasChecksum ? "yes, against SHA256SUMS" : "no checksum was published")}");
+
+        if (!o.ApplyNow)
+        {
+            Console.WriteLine("== staged; restart the app (or pass --apply-now) to apply it ==");
+            return 0;
+        }
+
+        var applyError = UpdateInstaller.BeginApply(staged, relaunch: true);
+        if (applyError != null)
+        {
+            Console.Error.WriteLine("could not start the update helper: " + applyError);
+            return 1;
+        }
+
+        Console.WriteLine("== the update helper is waiting for this process to exit; the app restarts on the new build ==");
+        return 0;
     }
 }

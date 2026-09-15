@@ -27,6 +27,15 @@ public sealed class Options
     public bool Stop { get; private set; }
     public bool CheckHarness { get; private set; }
 
+    /** --updates: open the updates window as soon as the app window is up. */
+    public bool OpenUpdates { get; private set; }
+
+    /** --install-update: download and verify the newest release, then exit. */
+    public bool InstallUpdate { get; private set; }
+
+    /** --apply-now: with --install-update, hand over to the helper instead of stopping at staging. */
+    public bool ApplyNow { get; private set; }
+
     /** --check-updates: report app + harness update state and exit. */
     public bool CheckUpdates { get; private set; }
 
@@ -128,6 +137,18 @@ public sealed class Options
                 case "--check-updates":
                 case "-check-updates":
                     o.CheckUpdates = true;
+                    break;
+                case "--updates":
+                case "-updates":
+                    o.OpenUpdates = true;
+                    break;
+                case "--install-update":
+                case "-install-update":
+                    o.InstallUpdate = true;
+                    break;
+                case "--apply-now":
+                case "-apply-now":
+                    o.ApplyNow = true;
                     break;
                 case "--no-update-check":
                 case "-no-update-check":

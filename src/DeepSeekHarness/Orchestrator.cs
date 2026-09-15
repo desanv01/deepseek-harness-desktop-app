@@ -160,6 +160,7 @@ public static class Orchestrator
         try
         {
             using var form = new MainForm(pageUrl, AppPaths.WebView2Data, project, o.UpdatePolicy);
+            if (o.OpenUpdates) form.OpenUpdatesWhenShown();
             onFocus = form.FocusFromSignal;
             signal?.Start();
             Application.Run(form);

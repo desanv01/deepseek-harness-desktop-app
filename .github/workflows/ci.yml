@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (Release, win-x64)
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/DeepSeekHarness/DeepSeekHarness.csproj -r win-x64
+
+      - name: Build
+        run: >
+          dotnet build src/DeepSeekHarness/DeepSeekHarness.csproj
+          -c Release -r win-x64 --no-restore
+
+      - name: Check the version scheme
+        shell: pwsh
+        run: |
+          # The release tag is v<Version>, and the updater compares them as
+          # dates, so <Version> has to be a yyyy.MM.dd date.
+          $xml = Get-Content src/DeepSeekHarness/DeepSeekHarness.csproj -Raw
+          $match = [regex]::Match($xml, '<Version>([^<]+)</Version>')
+          if (-not $match.Success) { throw 'the project file has no <Version>' }
+          $version = $match.Groups[1].Value
+          if ($version -notmatch '^\d{4}\.\d{2}\.\d{2}$') {
+            throw "<Version>$version</Version> is not a yyyy.MM.dd release date"
+          }
+          Write-Host "version $version looks right"
+
+      - name: Smoke test the command line
+        shell: pwsh
+        run: |
+          # The published app, not the build output: this is what users run.
+          dotnet publish src/DeepSeekHarness/DeepSeekHarness.csproj -c Release -r win-x64 `
+            --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o dist --no-restore
+          $env:DSH_DESKTOP_HOME = Join-Path $env:RUNNER_TEMP 'dsh-desktop-ci'
+          $exe = Join-Path (Get-Location) 'dist/DeepSeekHarness.exe'
+          & $exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "--self-test failed with $LASTEXITCODE" }
+
+          # An invalid flag must be rejected with the documented exit code.
+          & $exe --port 99999 2>$null
+          if ($LASTEXITCODE -ne 2) { throw "an out-of-range --port should exit 2, got $LASTEXITCODE" }
+          Write-Host 'command line behaved as documented'

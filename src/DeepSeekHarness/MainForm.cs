@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -23,6 +24,53 @@ public sealed class MainForm : Form
     private const string DshMarkerScript =
         "(function(){try{return typeof window.__DSH_BOOT__ !== 'undefined';}catch(e){return false;}})()";
 
+    /**
+     * Injected into every page the window loads: a small pill in the corner of
+     * the harness UI that only appears when a newer build exists, and that
+     * hands the click back to the app through the WebView2 message channel.
+     * It adds one element and never touches the harness's own markup.
+     */
+    private const string BadgeScript = """
+        (function () {
+          if (window.__dshDesktopUpdates) return;
+          var ID = 'dsh-desktop-update-badge';
+          function ensure() {
+            var el = document.getElementById(ID);
+            if (el) return el;
+            el = document.createElement('button');
+            el.id = ID;
+            el.type = 'button';
+            el.style.cssText = [
+              'position:fixed', 'right:18px', 'bottom:18px', 'z-index:2147483000',
+              'display:none', 'align-items:center', 'gap:8px',
+              'padding:8px 14px', 'border-radius:999px',
+              'border:1px solid rgba(255,255,255,0.16)',
+              'background:#2f6df6', 'color:#ffffff',
+              'font:600 13px/1.2 "Segoe UI",system-ui,sans-serif',
+              'box-shadow:0 8px 22px rgba(0,0,0,0.38)', 'cursor:pointer'
+            ].join(';');
+            el.addEventListener('click', function () {
+              try {
+                window.chrome.webview.postMessage(JSON.stringify({ type: 'dsh-desktop-updates' }));
+              } catch (e) { }
+            });
+            (document.body || document.documentElement).appendChild(el);
+            return el;
+          }
+          window.__dshDesktopUpdates = {
+            show: function (text) {
+              var el = ensure();
+              el.textContent = text || 'Update available';
+              el.style.display = 'inline-flex';
+            },
+            hide: function () {
+              var el = document.getElementById(ID);
+              if (el) el.style.display = 'none';
+            }
+          };
+        })();
+        """;
+
     private readonly string _url;
     private readonly string _userDataDir;
     private readonly string _projectDir;
@@ -40,6 +88,8 @@ public sealed class MainForm : Form
     private AppUpdateInfo? _appUpdate;
     private bool _appUpdateCheckRunning;
     private string? _announcedTag;
+    private UpdatesForm? _updates;
+    private bool _openUpdatesOnShown;
 
     public MainForm(string url, string userDataDir, string projectDir, UpdatePolicy? policy = null)
     {
@@ -96,7 +146,15 @@ public sealed class MainForm : Form
         EnsureTray();
         _ = CheckHarnessAsync();
         _ = CheckAppUpdateAsync(force: false);
+        if (_openUpdatesOnShown)
+        {
+            _openUpdatesOnShown = false;
+            BeginInvoke(new Action(ShowUpdates));
+        }
     }
+
+    /** --updates: open the updates window as soon as the window is up. */
+    public void OpenUpdatesWhenShown() => _openUpdatesOnShown = true;
 
     /** Brings the window forward when a later launch asks this instance to focus. */
     public void FocusFromSignal()
@@ -124,8 +182,7 @@ public sealed class MainForm : Form
                 onHide: HideToTray,
                 onExit: Close,
                 onCheckHarness: () => _ = OnCheckHarnessAsync(),
-                onCheckUpdates: () => _ = OnCheckUpdatesAsync(),
-                harnessStatus: _harnessStatus,
+                onCheckUpdates: () => _ = OnCheckUpdatesAsync(),                harnessStatus: _harnessStatus,
                 appStatus: _appUpdateStatus);
             _tray.SetHarnessStatus(_harnessStatus);
             _tray.SetAppStatus(_appUpdateStatus);
@@ -309,6 +366,7 @@ public sealed class MainForm : Form
                 Text = available
                     ? $"{_baseTitle} - update {info!.Latest!.Version} available"
                     : _baseTitle;
+                UpdateBadge();
 
                 if (available && !string.Equals(_announcedTag, info!.Latest!.Tag, StringComparison.Ordinal))
                 {
@@ -335,79 +393,58 @@ public sealed class MainForm : Form
         return text;
     }
 
-    /** Tray action: refresh both update checks and report what was found. */
-    private async Task OnCheckUpdatesAsync()
+    /** Tray action: open the updates window (app and harness tracks). */
+    private Task OnCheckUpdatesAsync()
     {
-        if (_appUpdateCheckRunning) return;
-        await CheckAppUpdateAsync(force: true);
-
-        var installed = Tools.Discover().DshVersion;
-        var harness = await HarnessUpdate.QueryAsync(installed).ConfigureAwait(true);
-        _harnessVersions = harness;
-        if (harness != null)
-        {
-            _harnessStatus = harness.Available == null
-                ? $"Harness v{harness.Installed} (up to date)"
-                : $"Harness v{harness.Installed} -> {harness.Available} available";
-            ApplyHarnessStatus();
-        }
-
-        var info = _appUpdate;
-        var lines = new List<string> { $"Desktop app: installed {AppInfo.Version}" };
-        if (info == null || info.Error != null)
-        {
-            lines.Add("  the release feed could not be read: " + (info?.Error ?? "unknown error"));
-        }
-        else if (info.Latest == null)
-        {
-            lines.Add("  no published release was found");
-        }
-        else if (!info.UpdateAvailable)
-        {
-            lines.Add($"  {info.Latest.Version} is the newest published build");
-        }
-        else
-        {
-            lines.Add($"  {info.Latest.Version} is available - {info.Latest.Describe()}");
-            var notes = info.Latest.Notes.Trim();
-            if (notes.Length > 0)
-            {
-                var firstLine = notes.ReplaceLineEndings("\n").Split('\n')[0].Trim();
-                if (firstLine.Length > 0) lines.Add("  " + firstLine);
-            }
-        }
-
-        lines.Add("");
-        lines.Add($"Harness: installed {installed ?? "unknown"}");
-        lines.Add(harness == null
-            ? "  the npm registry could not be read"
-            : harness.Available == null
-                ? $"  {harness.Latest ?? "?"} is the newest on the {HarnessUpdate.DefaultChannel} channel"
-                : $"  {harness.Available} is available on npm");
-
-        var updateAvailable = info is { UpdateAvailable: true, Latest: not null };
-        var openPage = updateAvailable && MessageBox.Show(this,
-            string.Join(Environment.NewLine, lines) + Environment.NewLine + Environment.NewLine
-            + "Open the release page in your browser?",
-            "Check for updates", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes;
-
-        if (openPage) OpenUrl(info!.Latest!.HtmlUrl);
+        ShowUpdates();
+        return Task.CompletedTask;
     }
 
-    /** Opens a URL in the default browser; failures are logged, never thrown. */
-    private static void OpenUrl(string url)
+    /** Opens the updates window, or brings the open one forward. */
+    public void ShowUpdates()
     {
+        if (IsDisposed) return;
         try
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            if (_updates == null || _updates.IsDisposed)
             {
-                FileName = url,
-                UseShellExecute = true,
-            });
+                _updates = new UpdatesForm(
+                    _policy,
+                    onAppUpdate: info =>
+                    {
+                        _appUpdate = info;
+                        _appUpdateStatus = info.StatusLine;
+                        ApplyUpdateState();
+                    },
+                    onCheckPolicyChanged: SaveUpdatePolicy,
+                    onRestartApp: RestartApp,
+                    onApplyExit: Close);
+            }
+
+            if (!_updates.Visible) _updates.Show(this);
+            _updates.Activate();
+            _updates.BringToFront();
+            Log.Info("updates window opened");
         }
         catch (Exception ex)
         {
-            Log.Warn($"could not open {url}: {ex.Message}");
+            Log.Warn("could not open the updates window: " + ex.Message);
+        }
+    }
+
+    /** Persists the "check for updates on launch" preference. */
+    private static void SaveUpdatePolicy(bool enabled)
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            settings.CheckForUpdates = enabled;
+            settings.Save();
+            Log.Info($"update checks on launch {(enabled ? "enabled" : "disabled")}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not save the update preference: " + ex.Message);
         }
     }
 
@@ -491,6 +528,8 @@ public sealed class MainForm : Form
                     web.CoreWebView2.Settings.IsStatusBarEnabled = false;
                     web.DefaultBackgroundColor = CurrentBackground();
                     web.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+                    web.CoreWebView2.WebMessageReceived += OnWebMessage;
+                    _ = web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(BadgeScript);
                     web.CoreWebView2.Navigate(_url);
                 }
                 else
@@ -524,11 +563,47 @@ public sealed class MainForm : Form
                 return;
             }
             SetStatus(string.Empty); // hide overlay
+            UpdateBadge();
             await MeasurePageBackgroundAsync();
         }
         catch (Exception ex)
         {
             SetStatus("The DeepSeek Harness page could not be verified:\n" + ex.Message);
+        }
+    }
+
+    /** The update pill inside the page opens the updates window. */
+    private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            if (e.WebMessageAsJson?.Contains("dsh-desktop-updates", StringComparison.Ordinal) == true)
+            {
+                ShowUpdates();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not read a page message: " + ex.Message);
+        }
+    }
+
+    /** Shows or hides the in-page update pill to match the current state. */
+    private void UpdateBadge()
+    {
+        try
+        {
+            var core = _web?.CoreWebView2;
+            if (core == null) return;
+
+            var script = _appUpdate is { UpdateAvailable: true, Latest: not null }
+                ? $"window.__dshDesktopUpdates&&window.__dshDesktopUpdates.show({JsonSerializer.Serialize("Update " + _appUpdate.Latest.Version + " available")})"
+                : "window.__dshDesktopUpdates&&window.__dshDesktopUpdates.hide()";
+            _ = core.ExecuteScriptAsync(script);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not update the in-page badge: " + ex.Message);
         }
     }
 

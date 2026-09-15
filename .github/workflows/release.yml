@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (must be v<Version> from the project file)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish the portable build
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Check the tag against the project version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          $xml = Get-Content src/DeepSeekHarness/DeepSeekHarness.csproj -Raw
+          $match = [regex]::Match($xml, '<Version>([^<]+)</Version>')
+          if (-not $match.Success) { throw 'the project file has no <Version>' }
+          $version = $match.Groups[1].Value
+
+          # A release that does not match its tag is exactly the drift the
+          # updater must never see, so refuse instead of publishing.
+          if ($tag -ne "v$version") { throw "tag $tag does not match v$version in the project file" }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "publishing $tag"
+
+      - name: Restore
+        run: dotnet restore src/DeepSeekHarness/DeepSeekHarness.csproj -r win-x64
+
+      - name: Publish the single-file build
+        run: >
+          dotnet publish src/DeepSeekHarness/DeepSeekHarness.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=None
+          -o out --no-restore
+
+      - name: Package, then write SHA256SUMS
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $name = "DeepSeekHarness-win-x64-$version"
+
+          # only the exe goes into the release; the XML docs are build noise
+          Get-ChildItem out -Filter *.xml | Remove-Item -Force
+          Copy-Item "out/DeepSeekHarness.exe" "$name.exe"
+          Compress-Archive -Path "$name.exe" -DestinationPath "$name.zip" -Force
+
+          # The in-app updater refuses a download that does not match this file,
+          # so it is published with every release.
+          $lines = foreach ($file in @("$name.exe", "$name.zip")) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $file"
+          }
+          $lines | Set-Content SHA256SUMS -Encoding ascii
+          Get-Content SHA256SUMS
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $version = '${{ steps.version.outputs.version }}'
+          $name = "DeepSeekHarness-win-x64-$version"
+
+          if (gh release view $tag 2>$null) {
+            Write-Host "release $tag already exists; uploading the assets"
+            gh release upload $tag "$name.exe" "$name.zip" SHA256SUMS --clobber
+          } else {
+            gh release create $tag "$name.exe" "$name.zip" SHA256SUMS `
+              --title "$tag" `
+              --generate-notes
+          }

@@ -8,6 +8,14 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // The update helper runs before anything else exists: it is started by
+        // the app that is about to exit, waits for it, swaps the executable, and
+        // relaunches. It never creates a window and never parses other flags.
+        if (args.Length > 0 && string.Equals(args[0], "--apply-update", StringComparison.OrdinalIgnoreCase))
+        {
+            return args.Length > 1 ? UpdateApply.Run(args[1]) : 2;
+        }
+
         // Visual styles and DPI awareness must be decided before the first
         // window exists, so they run before argument parsing and the splash.
         try
@@ -35,6 +43,7 @@ internal static class Program
             if (opts.SelfTest) return SelfTest.Run(opts);
             if (opts.CheckHarness) return HarnessUpdate.RunCheck();
             if (opts.CheckUpdates) return UpdateCli.Run(opts);
+            if (opts.InstallUpdate) return UpdateCli.RunInstall(opts);
             if (opts.Stop) return Orchestrator.RunStop(opts);
             return Orchestrator.Run(opts);
         }
