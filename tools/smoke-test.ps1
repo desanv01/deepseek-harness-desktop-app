@@ -212,6 +212,10 @@ Write-Host ("smoke test: {0}" -f $Exe) -ForegroundColor Cyan
 Write-Host ("fixtures  : {0}" -f $WorkRoot) -ForegroundColor Cyan
 
 try {
+    # Whether this machine has a usable harness CLI: several assertions below
+    # only make sense when one exists, and a runner without one skips them.
+    $cli = Join-Path $originalAppData 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js'
+    $haveHarness = (Test-Path -LiteralPath $cli) -and [bool](Get-Command node -ErrorAction SilentlyContinue)
     # ---------------------------------------------------------------- scenario 1
     Write-Step '1. a shim on PATH names the CLI, so the app finds it'
     $f1 = Join-Path $WorkRoot 's1'
@@ -246,8 +250,13 @@ try {
     Assert-Contains $r.Out 'dsh state   : INCOMPLETE' 'the broken install is named as such'
     Assert-Contains $r.Out 'dsh problem :' 'the reason is reported'
     Assert-Contains $r.Out 'does not exist' 'the missing entry file is named'
-    $r = Invoke-App @('--self-test') 's3b'
-    Assert-Contains $r.Out 'dsh state   : FOUND' 'a broken one on PATH does not hide a working CLI'
+    if ($haveHarness) {
+        $r = Invoke-App @('--self-test') 's3b'
+        Assert-Contains $r.Out 'dsh state   : FOUND' 'a broken one on PATH does not hide a working CLI'
+    }
+    else {
+        Write-Host '    SKIP  nothing to prefer: this machine has no working harness CLI'
+    }
 
     # ---------------------------------------------------------------- scenario 4
     Write-Step '4. --repair-harness installs a missing CLI'
@@ -303,9 +312,6 @@ try {
     # ---------------------------------------------------------------- scenario 7
     # The plugin scenarios need a harness CLI on this machine; a machine without
     # one skips them rather than failing the suite.
-    $cli = Join-Path $originalAppData 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js'
-    $haveHarness = (Test-Path -LiteralPath $cli) -and (Get-Command node -ErrorAction SilentlyContinue)
-
     if (-not $haveHarness) {
         Write-Step '7-9. plugin scenarios'
         Write-Host '    SKIP  no harness CLI on this machine (set up node + @deepseek-ai/dsh)'
