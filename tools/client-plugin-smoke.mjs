@@ -209,17 +209,48 @@ let bridgeState = {
 }
 
 const registrations = []
+
+/** The slots the shipped shell declares, with the kind that governs registration. */
+const declaredSlots = {
+  'settings.section': 'list',
+}
+
+/** Declarations arriving late: inject waits, and the factory runs on declare. */
+const waiting = []
+
 const context = {
   slots: {
     register: (descriptor, component) => {
+      const kind = declaredSlots[descriptor?.name]
+      if (kind === undefined) {
+        throw new Error(`slot "${descriptor?.name}" is not declared`)
+      }
+      if (kind === 'list' && descriptor.id === undefined) {
+        throw new Error(`list slot "${descriptor.name}" requires options.id`)
+      }
       registrations.push({ ...descriptor, component })
       return () => {}
     },
     inject: (name, factory) => {
+      // The shell's declaration may land after the plugin applies; the real
+      // inject waits for it instead of throwing, so a callback failure surfaces
+      // later, where a bare try/catch around apply() would not see it.
+      if (declaredSlots[name] === undefined) {
+        waiting.push({ name, factory })
+        return () => {}
+      }
       factory()
       return () => {}
     },
   },
+}
+
+/** Declares a slot the way the shell does, running whatever waited for it. */
+function declareSlot(name, kind) {
+  declaredSlots[name] = kind
+  for (const pending of waiting.splice(0)) {
+    if (pending.name === name) pending.factory()
+  }
 }
 
 const moduleTable = { react: React }
@@ -263,13 +294,36 @@ check(typeof exportsObject.apply === 'function', 'it exports apply()')
 
 exportsObject.apply(context)
 
-const footer = registrations.find((entry) => entry.name === 'sidebar.footer.action')
 const section = registrations.find((entry) => entry.name === 'settings.section')
-check(Boolean(footer), 'apply() registers the sidebar entry beside Settings')
 check(Boolean(section), 'apply() registers a settings section')
 check(section?.id === 'desktop-updates', 'the section has a stable id')
 check(typeof section?.label === 'function' && section.label() === 'Updates', 'the section is labelled Updates')
 check(typeof section?.order === 'number', 'the section declares an order')
+
+// The sidebar entry waits for the sidebar to declare its slot, exactly as it
+// does when the shell mounts after the plugin applies - and that is where a
+// registration the registry rejects surfaces, not in apply() itself.
+let lateFailure = null
+try {
+  declareSlot('sidebar.footer.action', 'list')
+} catch (error) {
+  lateFailure = error
+}
+check(lateFailure === null, 'the sidebar entry registers when the sidebar declares the slot')
+
+const footer = registrations.find((entry) => entry.name === 'sidebar.footer.action')
+check(Boolean(footer), 'apply() contributes the sidebar entry beside Settings')
+check(footer?.id === 'desktop-updates', 'the sidebar entry carries the list slot id the registry requires')
+
+const marker = window.__dshDesktopUpdates
+check(Boolean(marker), 'the bundle leaves a marker the app can read')
+check(
+  Array.isArray(marker?.registered) && marker.registered.includes('sidebar.footer.action')
+  && marker.registered.includes('settings.section'),
+  'the marker names both slots as registered',
+)
+check(Array.isArray(marker?.failed) && marker.failed.length === 0, 'the marker reports no failed contribution')
+check(marker?.plugin === 'dsh-plugin-desktop-updates', 'the marker names the plugin')
 
 // the sidebar entry, wide and rail. Each render is a fresh mount, so the state
 // set below is what the component sees.
@@ -293,6 +347,21 @@ check(sectionText.includes('Restart to apply'), 'the section offers the restart 
 check(sectionText.includes('0.1.5-rc.1'), 'the section shows the harness versions')
 check(sectionText.includes('dsh-find-plugin'), 'the section lists this home\u2019s plugins')
 check(sectionText.includes('base profile'), 'the base bundles are marked as such')
+
+// A contribution the shell rejected renders nowhere, so the section has to say
+// so: this is the only surface a user ever sees for it.
+check(
+  !sectionText.includes('Part of this page did not load'),
+  'a clean boot shows no rejected-contribution warning',
+)
+window.__dshDesktopUpdates.failed.push('sidebar.footer.action: list slot requires options.id')
+const warnedText = textOf(render(section.component, { close: () => {} }))
+check(
+  warnedText.includes('Part of this page did not load')
+  && warnedText.includes('list slot requires options.id'),
+  'a rejected contribution is reported in the section',
+)
+window.__dshDesktopUpdates.failed.length = 0
 
 // the bridge contract is actually used
 check(stateListener !== null, 'the section subscribes to app state')

@@ -35,6 +35,43 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+		/**
+		 * Says what this plugin did, into the app's log. Without it, a plugin
+		 * whose UI does not appear is indistinguishable from one that never
+		 * loaded: the harness host logs nothing about browser halves.
+		 */
+		function report(message) {
+			try {
+				window.chrome.webview.postMessage(
+					JSON.stringify({
+						dsh: 1,
+						id: 0,
+						method: 'pageLog',
+						params: { level: 'info', message: message, source: 'dsh-plugin-desktop-updates', line: 0 },
+					}),
+				)
+			} catch (error) {
+				// no host to tell
+			}
+		}
+
+		/**
+		 * The contributions the shell rejected, as the marker recorded them. A
+		 * rejected entry renders nowhere and the shell reports nothing, so this
+		 * section is the one place the user can see that part of the page is
+		 * missing. It is read at render time rather than subscribed to: a
+		 * contribution can only fail while the page boots, and the section
+		 * re-renders on every state push after that.
+		 */
+		function rejectedContributions() {
+			try {
+				const marker = window.__dshDesktopUpdates
+				return marker && Array.isArray(marker.failed) ? marker.failed : []
+			} catch (error) {
+				return []
+			}
+		}
+
 		/** Subscribes to the app's state pushes and returns the live snapshot. */
 		function useBridgeState() {
 			const [state, setState] = useState(() => {
@@ -280,6 +317,7 @@ window.__ModuleLoader__.load({
 			const harness = (state && state.harness) || {}
 			const staged = state && state.staged
 			const notes = app.notes
+			const rejected = rejectedContributions()
 
 			return h(
 				'div',
@@ -290,6 +328,14 @@ window.__ModuleLoader__.load({
 					{ style: { opacity: 0.7, fontSize: '12.5px', marginBottom: '12px' } },
 					'Desktop app, harness, and the plugins this home runs.',
 				),
+
+				rejected.length > 0
+					? h(Status, {
+							text: 'Part of this page did not load: ' + rejected.join('; ')
+								+ '. Everything else here still works.',
+							bad: true,
+						})
+					: null,
 
 				h(Row, { label: 'Desktop app', value: app.version || 'unknown', strong: true }),
 				h(Row, { label: 'Newest published', value: app.latest || 'not checked' }),
@@ -497,20 +543,70 @@ window.__ModuleLoader__.load({
 		}
 
 		function apply(ctx) {
-			ctx.slots.inject('sidebar.footer.action', () =>
-				ctx.slots.register({ name: 'sidebar.footer.action' }, UpdatesFooterAction),
+			// A marker for support and for the app: what this half registered, and
+			// whether it found the bridge. The app reads it after the page loads.
+			const marker = { plugin: name, bridge: Boolean(bridge()), registered: [], failed: [] }
+			window.__dshDesktopUpdates = marker
+
+			// Both slots are list slots: `id` is required, and registering a list
+			// entry without one throws rather than rendering nothing. Each
+			// contribution is installed on its own, so a slot this build of the
+			// shell does not declare cannot take the other one down with it, and
+			// a rejection is recorded in the marker and sent to the app's log:
+			// the shell retires a failed injection without a word, so that report
+			// is the only place a rejected entry becomes visible.
+			const contribute = (slot, options, component) => {
+				const note = (error) => {
+					const reason = (error && error.message) || String(error)
+					marker.failed.push(slot + ': ' + reason)
+					report('registering into ' + slot + ' failed: ' + reason)
+					return error
+				}
+
+				try {
+					ctx.slots.inject(slot, () => {
+						try {
+							const dispose = ctx.slots.register(options, component)
+							marker.registered.push(slot)
+							return dispose
+						} catch (error) {
+							// A callback that runs after apply() fails inside
+							// the registry's declaration listener, which retires
+							// the injection and rethrows - so this one keeps its
+							// throw.
+							throw note(error)
+						}
+					})
+				} catch (error) {
+					// A slot already declared when apply() runs fails here
+					// instead. That failure stays contained: the other half of
+					// the plugin is still worth installing, and the note above
+					// already put the reason in the app's log.
+				}
+			}
+
+			contribute(
+				'sidebar.footer.action',
+				{
+					name: 'sidebar.footer.action',
+					id: 'desktop-updates',
+					order: 20,
+					label: () => 'Check for updates',
+				},
+				UpdatesFooterAction,
 			)
-			ctx.slots.inject('settings.section', () =>
-				ctx.slots.register(
-					{
-						name: 'settings.section',
-						id: 'desktop-updates',
-						order: 15,
-						label: () => 'Updates',
-					},
-					UpdatesSection,
-				),
+			contribute(
+				'settings.section',
+				{
+					name: 'settings.section',
+					id: 'desktop-updates',
+					order: 15,
+					label: () => 'Updates',
+				},
+				UpdatesSection,
 			)
+
+			report('applied: ' + JSON.stringify(marker))
 		}
 
 		return { name, inject, apply }

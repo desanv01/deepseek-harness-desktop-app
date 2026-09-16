@@ -443,7 +443,9 @@ try {
         $clientText = if (Test-Path $clientOut) { Get-Content -LiteralPath $clientOut -Raw } else { '' }
         $clientPassed = if ($clientText -match '(\d+) passed') { [int]$Matches[1] } else { 0 }
         Assert-True ($clientCode -eq 0) ("the client smoke exits 0 ({0} assertions)" -f $clientPassed)
-        Assert-Contains $clientText 'apply() registers the sidebar entry beside Settings' 'the sidebar entry is registered'
+        Assert-Contains $clientText 'apply() contributes the sidebar entry beside Settings' 'the sidebar entry is registered'
+        Assert-Contains $clientText 'the sidebar entry carries the list slot id the registry requires' `
+            'the sidebar entry carries the id a list slot requires'
         Assert-Contains $clientText 'the section shows the installed app version' 'the settings section renders live state'
         Assert-Contains $clientText 'without the bridge the section says the app is not connected' `
             'it says so when the desktop app is not attached'
