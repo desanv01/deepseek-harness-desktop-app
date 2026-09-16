@@ -75,6 +75,18 @@ jobs:
 
           Write-Host 'command line behaved as documented'
 
+      - name: Install the harness CLI for the plugin scenarios
+        shell: pwsh
+        run: |
+          # The plugin scenarios need a real harness CLI to initialize profiles.
+          # A runner that cannot install it skips those scenarios instead of
+          # failing: they are covered locally, and this step is an upgrade.
+          npm install -g @deepseek-ai/dsh@0.1.5-rc.1 --no-audit --no-fund --loglevel=error
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::warning::the harness CLI could not be installed; the plugin scenarios will skip'
+          }
+          exit 0
+
       - name: Smoke test the harness CLI handling
         shell: pwsh
         run: |

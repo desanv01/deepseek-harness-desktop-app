@@ -423,6 +423,27 @@ try {
         $patch = Get-Content -LiteralPath (Join-Path $f9 'profiles\web\cordis.patch.yml') -Raw
         Assert-True ($patch -like '*thrower*' -and $patch -like '*disabled: true*') 'its row is disabled in the patch layer'
     }
+
+    # --------------------------------------------------------------- scenario 10
+    Write-Step '10. the updates UI renders without a browser'
+    # The plugin's browser half, rendered headlessly: WebView2 cannot start in
+    # every build environment, so its UI code is checked here instead of by eye.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $clientSmoke = Join-Path $root 'tools\client-plugin-smoke.mjs'
+        $clientOut = Join-Path $WorkRoot 'client-smoke.txt'
+        & node $clientSmoke > $clientOut 2>&1
+        $clientCode = $LASTEXITCODE
+        $clientText = if (Test-Path $clientOut) { Get-Content -LiteralPath $clientOut -Raw } else { '' }
+        $clientPassed = if ($clientText -match '(\d+) passed') { [int]$Matches[1] } else { 0 }
+        Assert-True ($clientCode -eq 0) ("the client smoke exits 0 ({0} assertions)" -f $clientPassed)
+        Assert-Contains $clientText 'apply() registers the sidebar entry beside Settings' 'the sidebar entry is registered'
+        Assert-Contains $clientText 'the section shows the installed app version' 'the settings section renders live state'
+        Assert-Contains $clientText 'without the bridge the section says the app is not connected' `
+            'it says so when the desktop app is not attached'
+    }
+    else {
+        Write-Host '    SKIP  node is not on PATH'
+    }
 }
 finally {
     Reset-Environment

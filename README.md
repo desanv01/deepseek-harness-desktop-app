@@ -148,6 +148,8 @@ dotnet build -c Release -r win-x64            # or .\build.ps1
 
 `tools\smoke-test.ps1` is a behavioural suite for the part of the app that depends on the machine: it builds throwaway fixtures — a fake npm global prefix with a shim and a package, and a fake `npm` that can succeed, fail, or leave a half-written package behind — then asserts what the app reports and what it does to the installation. It needs no network, no real harness install, and no real npm, and CI runs it on every push.
 
+`tools\client-plugin-smoke.mjs` renders the updates plugin's browser half with a minimal React and a fake shell: it loads the real `client.js`, checks the plugin registers both slots, and asserts what the components produce — the sidebar entry, the settings section with live state, the plugin manager's controls, and the message shown when the desktop app is not attached. That is how the UI is verified where WebView2 cannot start; the behavioural suite runs it as its last scenario.
+
 ### Cutting a release
 
 `<Version>` in `DeepSeekHarness.csproj` is the release date in `yyyy.MM.dd` form, and the release tag is `v<Version>`. The updater compares the two as dates, so they have to agree — and the workflow refuses to publish when they do not.
