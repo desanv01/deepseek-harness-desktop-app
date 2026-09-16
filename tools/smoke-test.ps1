@@ -212,10 +212,17 @@ Write-Host ("smoke test: {0}" -f $Exe) -ForegroundColor Cyan
 Write-Host ("fixtures  : {0}" -f $WorkRoot) -ForegroundColor Cyan
 
 try {
-    # Whether this machine has a usable harness CLI: several assertions below
-    # only make sense when one exists, and a runner without one skips them.
-    $cli = Join-Path $originalAppData 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js'
-    $haveHarness = (Test-Path -LiteralPath $cli) -and [bool](Get-Command node -ErrorAction SilentlyContinue)
+    # Whether this machine has a usable harness CLI: several scenarios below only
+    # make sense when one exists, and a runner without one skips them. The app is
+    # asked rather than guessed at, because it searches PATH as well as the npm
+    # global folder - and a runner may keep the global prefix elsewhere (GitHub's
+    # Windows runners use C:\npm\global, not %APPDATA%\npm).
+    New-Item -ItemType Directory -Force -Path (Join-Path $WorkRoot 'probe') | Out-Null
+    Set-ScenarioPath (Join-Path $WorkRoot 'probe') -RealHarness
+    $probe = Invoke-App @('--self-test') 'probe'
+    $haveHarness = ($probe.Out -match 'dsh state\s+:\s+FOUND') -and [bool](Get-Command node -ErrorAction SilentlyContinue)
+    Write-Host ("    harness CLI on this machine: {0}" -f $(if ($haveHarness) { 'yes' } else { 'no' }))
+
     # ---------------------------------------------------------------- scenario 1
     Write-Step '1. a shim on PATH names the CLI, so the app finds it'
     $f1 = Join-Path $WorkRoot 's1'
