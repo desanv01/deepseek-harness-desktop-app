@@ -1,0 +1,72 @@
+name: Publish the plugin
+
+# The updates UI reaches a home one of two ways: inside the app's executable,
+# which is the default and needs nothing from anyone, or from npm like any other
+# DSH plugin. This is the second one.
+#
+# It is manual because a published version is permanent. Bump the version in
+# plugins/dsh-plugin-desktop-updates/package.json, merge that, then run this with
+# the same version - a mismatch fails instead of publishing something the
+# source does not say.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (must match the plugin manifest)'
+        required: true
+      dry_run:
+        description: 'Pack and report the tarball without publishing it'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish dsh-plugin-desktop-updates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check the version against the plugin manifest
+        run: |
+          manifest=$(node -p "require('./plugins/dsh-plugin-desktop-updates/package.json').version")
+          echo "manifest: $manifest, requested: ${{ inputs.version }}"
+          if [ "$manifest" != "${{ inputs.version }}" ]; then
+            echo "::error::the plugin manifest says $manifest, not ${{ inputs.version }}"
+            exit 1
+          fi
+          if npm view "dsh-plugin-desktop-updates@${{ inputs.version }}" version >/dev/null 2>&1; then
+            echo "::error::dsh-plugin-desktop-updates@${{ inputs.version }} is already published"
+            exit 1
+          fi
+
+      # The repository copy is private and carries the app's own files; the
+      # tarball is staged from it so the two distributions cannot drift.
+      - name: Stage the package
+        run: node tools/stage-plugin-package.mjs plugins/dsh-plugin-desktop-updates plugin-out
+
+      - name: Pack
+        working-directory: plugin-out
+        run: npm pack
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        working-directory: plugin-out
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::add an NPM_TOKEN repository secret (an npm automation token) to publish"
+            exit 1
+          fi
+          npm publish --access public

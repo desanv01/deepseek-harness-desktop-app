@@ -4,6 +4,21 @@
   "private": true,
   "type": "module",
   "description": "Updates and plugin management for the DeepSeek Harness desktop app: a sidebar entry beside Settings and a Settings section, driven by the app's native bridge.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "updates"
+  ],
+  "homepage": "https://github.com/desanv01/deepseek-harness-desktop-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/desanv01/deepseek-harness-desktop-app.git",
+    "directory": "plugins/dsh-plugin-desktop-updates"
+  },
+  "bugs": {
+    "url": "https://github.com/desanv01/deepseek-harness-desktop-app/issues"
+  },
   "main": "index.js",
   "license": "MIT",
   "exports": {
@@ -18,7 +33,8 @@
   "files": [
     "index.js",
     "client.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md"
   ],
   "dsh": {
     "bundle": {
