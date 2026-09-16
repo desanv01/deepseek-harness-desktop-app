@@ -56,6 +56,7 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Repairs a broken harness install** — an interrupted `npm install -g` leaves the package directory behind without the files the CLI needs. The app says exactly that instead of claiming the harness is not installed, and offers to install it; `--update` does the same without asking, and `--repair-harness` does it from a script. Before npm touches a working install, the app moves it aside and puts it back if the result does not validate, so a failed update never costs you a working harness.
 - **Update aware** — on launch it also asks GitHub for a newer build of this app, caches the answer for six hours, and announces one when it exists: a tray notification, a line in the tray menu, a pill inside the harness page, and the version in the window title. Detection reads release metadata only.
 - **In-app updates** — the Updates section lives inside the harness UI, where this harness expects extensions to live. A bundled DSH plugin registers it into the sidebar (beside Settings) and into Settings itself, and talks to the app through a versioned page bridge (`window.__dshDesktop`). The app keeps what a page must never hold: the download, the checksum verification, the staged swap, and the restart. The native updates window remains as a fallback and as a shortcut from the tray.
+- **The plugin ships two ways** — the executable carries it and installs it into the home the app owns, with no package manager and no network; the same package is published to npm, so `dsh plugin add dsh-plugin-desktop-updates` installs it into any home like any other DSH plugin. A boot leaves an installed copy that is newer than the bundled one alone, so the npm path is not undone on the next launch; `--install-plugin` restores the bundled copy deliberately.
 - **Plugin management** — the same section installs, switches and removes harness plugins: ours and third-party ones, by npm name, git spec, or local folder. pnpm is carried by the build (extracted from the executable, or fetched with npm when the build shipped without it), so `dsh plugin add` works on a machine that has never installed pnpm. Enable/disable goes through the profile's patch layer, so a plugin can be taken out of the tree without uninstalling it.
 - **Safe mode** — a plugin the harness cannot load aborts the whole profile. The app reads the loader's own message, disables the offending plugin, and boots again once, so a bad plugin costs a notification instead of a window that never opens. `--safe-mode` boots with the base bundles only.
 - **Staged, never in place** — the running executable is never overwritten while it runs. The download is verified before the swap, the previous build is kept as `<exe>.old` until the new one has stayed up, and a checksum mismatch discards the download outright.
@@ -151,6 +152,17 @@ dotnet build -c Release -r win-x64            # or .\build.ps1
 `tools\client-plugin-smoke.mjs` renders the updates plugin's browser half with a minimal React and a fake shell: it loads the real `client.js`, checks the plugin registers both slots, and asserts what the components produce — the sidebar entry, the settings section with live state, the plugin manager's controls, and the message shown when the desktop app is not attached. The fake shell enforces the rule the real one does — both slots are lists, and a list entry without an `id` is rejected — and declares the sidebar slot *after* the plugin applies, which is when the real declaration lands. That is how the UI is verified where WebView2 cannot start; the behavioural suite runs it as its last scenario.
 
 `tools\boot-graph-probe.mjs` closes the gap between "the plugin is installed" and "the plugin runs in the page". It takes a running `dsh web` ready line's URL and token, mints the browser session, reads `window.__DSH_BOOT__` out of the served page, fetches the plugin bundle the graph advertises, and checks that the source the browser would run carries the module id, the marker, and the slot ids it needs. The behavioural suite's last scenario boots a real server on a fixture home and runs it, so a plugin the loader never emits or a bundle route that answers `404` fails in CI rather than in the window.
+
+### Publishing the plugin
+
+The plugin is distributed inside the executable and on npm. The repository copy is `private: true` — it carries the app's own files, and a stray `npm publish` from a checkout must not push it — so publishing stages a copy of it first:
+
+```powershell
+node tools\stage-plugin-package.mjs plugins\dsh-plugin-desktop-updates plugin-out
+cd plugin-out; npm publish --access public
+```
+
+`.github/workflows/publish-plugin.yml` does exactly that on demand. Bump the version in `plugins\dsh-plugin-desktop-updates\package.json`, merge it, then run the workflow with the same version: it refuses a version the manifest does not declare and one that is already published. It needs an `NPM_TOKEN` repository secret (an npm automation token) and says so when the secret is missing.
 
 ### Cutting a release
 
@@ -340,9 +352,9 @@ Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek
 - update install against a local release fixture — download, `SHA256SUMS` verification, staged apply, restart; a tampered checksum is refused and the download discarded; a build that exits immediately is rolled back to the previous one;
 - the injected update pill — exercised against a fake DOM (one element, posts on click, hides, survives a missing `document.body`);
 - harness CLI handling — `tools\smoke-test.ps1` covers discovery through a shim and through `package.json`, a half-installed package reported as incomplete, `--repair-harness` installing a missing CLI, a failed install restoring the previous one, and a successful install replacing it;
-- the plugin pipeline — the same suite installs the bundled plugin into a fresh home, adds a local plugin, switches it off and on through the patch layer, refuses to switch off a base bundle, removes it, and boots a home whose plugin throws on import, recovering with that plugin disabled (49 assertions, no network);
+- the plugin pipeline — the same suite installs the bundled plugin into a fresh home, adds a local plugin, switches it off and on through the patch layer, refuses to switch off a base bundle, removes it, and boots a home whose plugin throws on import, recovering with that plugin disabled; it also holds a newer plugin in place at boot and restores the bundled copy on `--install-plugin` (53 assertions, no network);
 - the page bridge — `--bridge-selftest`, 22 checks over parsing, dispatch, replies, parameter decoding, event shapes, and the plugin marker, run where WebView2 cannot start;
-- the served plugin — a real `dsh web` is booted on a fixture home and asked what it serves: the boot graph names the plugin row, the bundle route answers `200`, and the served source carries the module id, the marker, and the slot id the sidebar entry needs (10 checks, part of the same suite);
+- the served plugin — a real `dsh web` is booted on a fixture home and asked what it serves: the boot graph names the plugin row, the bundle route answers `200`, and the served source carries the module id, the marker, and the slot id the sidebar entry needs (10 checks, part of the same suite); the npm path was walked the same way, from a packed tarball through `--add-plugin` to the graph the server then served;
 - startup — measured on one machine: 25.5 s to a ready window before, 14.6 s after (the pre-flight phase alone went from 10 s to 1 s);
 - keep-alive — the server survives the window, the next launch adopts it (same pid), and `--stop` ends it;
 - `--stop`, invalid `--port`, unknown flag, missing `--update-feed` file — correct exit codes (`2`), `--check-updates` exits `10`/`0` as documented.
@@ -353,6 +365,7 @@ Known limitations:
 - One window per home: two projects need two homes (`--dsh-home`) rather than two windows over one server.
 - Update downloads are verified by checksum, not by signature. `SHA256SUMS` comes from the same release as the binary, so it catches a corrupted or altered download, not a compromised release. Authenticode signing and `WinVerifyTrust` at apply time are the remaining step.
 - There is no automated unit-test suite yet; CI builds, checks the version scheme, and smoke-tests the command line, and the manual checks above were run by hand.
+- The UI itself is verified without a browser: the plugin's components are rendered headlessly and the served bundle is read from a live server, but no check drives a real click in WebView2. A machine where the runtime cannot start runs everything except the window.
 
 ## Roadmap
 
