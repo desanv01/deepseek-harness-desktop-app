@@ -5,7 +5,7 @@ The app is feature-complete for its core promise: launch, project-scoped window,
 | Item | State | Notes |
 | --- | --- | --- |
 | 1. GitHub Actions | **done** | `ci.yml` builds and smoke-tests on every push; `release.yml` publishes a tagged build with `SHA256SUMS` |
-| 2. Unit tests | **partly done** | Two behavioural suites run in CI: `tools/smoke-test.ps1` (CLI discovery, repair, install safety, the plugin pipeline, safe-mode recovery - 43 assertions) and `tools/client-plugin-smoke.mjs`, which renders the updates plugin's browser half under a minimal React and a fake shell that enforces the real slot rules, so its UI is checked where WebView2 cannot start (36 assertions). The pure-logic unit tests below are still open |
+| 2. Unit tests | **partly done** | Two behavioural suites run in CI: `tools/smoke-test.ps1` (CLI discovery, repair, install safety, the plugin pipeline, safe-mode recovery, the served boot graph - 49 assertions) and `tools/client-plugin-smoke.mjs`, which renders the updates plugin's browser half under a minimal React and a fake shell that enforces the real slot rules, so its UI is checked where WebView2 cannot start (36 assertions). The pure-logic unit tests below are still open |
 | 3. Signed self-update | **partly done** | Detect, download, checksum-verify, stage, apply, roll back, and notify all ship; Authenticode signing and `WinVerifyTrust` do not |
 
 What follows is the original plan, kept for the parts that are still open.

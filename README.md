@@ -150,6 +150,8 @@ dotnet build -c Release -r win-x64            # or .\build.ps1
 
 `tools\client-plugin-smoke.mjs` renders the updates plugin's browser half with a minimal React and a fake shell: it loads the real `client.js`, checks the plugin registers both slots, and asserts what the components produce — the sidebar entry, the settings section with live state, the plugin manager's controls, and the message shown when the desktop app is not attached. The fake shell enforces the rule the real one does — both slots are lists, and a list entry without an `id` is rejected — and declares the sidebar slot *after* the plugin applies, which is when the real declaration lands. That is how the UI is verified where WebView2 cannot start; the behavioural suite runs it as its last scenario.
 
+`tools\boot-graph-probe.mjs` closes the gap between "the plugin is installed" and "the plugin runs in the page". It takes a running `dsh web` ready line's URL and token, mints the browser session, reads `window.__DSH_BOOT__` out of the served page, fetches the plugin bundle the graph advertises, and checks that the source the browser would run carries the module id, the marker, and the slot ids it needs. The behavioural suite's last scenario boots a real server on a fixture home and runs it, so a plugin the loader never emits or a bundle route that answers `404` fails in CI rather than in the window.
+
 ### Cutting a release
 
 `<Version>` in `DeepSeekHarness.csproj` is the release date in `yyyy.MM.dd` form, and the release tag is `v<Version>`. The updater compares the two as dates, so they have to agree — and the workflow refuses to publish when they do not.
@@ -306,6 +308,8 @@ screenshots/               # README images
 build.ps1                  # dev / portable-folder / single-file builds
 build_portable.ps1         # one self-contained exe + zip
 tools/smoke-test.ps1       # behavioural suite: CLI discovery, repair, install safety
+tools/client-plugin-smoke.mjs  # renders the updates plugin's browser half headlessly
+tools/boot-graph-probe.mjs # reads a live server's boot graph and the plugin bundle it serves
 tools/update-icons.ps1     # regenerates the embedded DeepSeek artwork
 ```
 
@@ -336,9 +340,9 @@ Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek
 - update install against a local release fixture — download, `SHA256SUMS` verification, staged apply, restart; a tampered checksum is refused and the download discarded; a build that exits immediately is rolled back to the previous one;
 - the injected update pill — exercised against a fake DOM (one element, posts on click, hides, survives a missing `document.body`);
 - harness CLI handling — `tools\smoke-test.ps1` covers discovery through a shim and through `package.json`, a half-installed package reported as incomplete, `--repair-harness` installing a missing CLI, a failed install restoring the previous one, and a successful install replacing it;
-- the plugin pipeline — the same suite installs the bundled plugin into a fresh home, adds a local plugin, switches it off and on through the patch layer, refuses to switch off a base bundle, removes it, and boots a home whose plugin throws on import, recovering with that plugin disabled (43 assertions, no network);
+- the plugin pipeline — the same suite installs the bundled plugin into a fresh home, adds a local plugin, switches it off and on through the patch layer, refuses to switch off a base bundle, removes it, and boots a home whose plugin throws on import, recovering with that plugin disabled (49 assertions, no network);
 - the page bridge — `--bridge-selftest`, 22 checks over parsing, dispatch, replies, parameter decoding, event shapes, and the plugin marker, run where WebView2 cannot start;
-- the updates section — the boot graph was read back from a live `dsh web` server: the plugin is one row of `window.__DSH_BOOT__` and its browser half is served (`200`); a live app confirmed it installs the plugin into the home it owns; and every page load is followed by reading the plugin's own marker, which names the slots it registered and any the shell refused;
+- the served plugin — a real `dsh web` is booted on a fixture home and asked what it serves: the boot graph names the plugin row, the bundle route answers `200`, and the served source carries the module id, the marker, and the slot id the sidebar entry needs (10 checks, part of the same suite);
 - startup — measured on one machine: 25.5 s to a ready window before, 14.6 s after (the pre-flight phase alone went from 10 s to 1 s);
 - keep-alive — the server survives the window, the next launch adopts it (same pid), and `--stop` ends it;
 - `--stop`, invalid `--port`, unknown flag, missing `--update-feed` file — correct exit codes (`2`), `--check-updates` exits `10`/`0` as documented.
