@@ -221,6 +221,8 @@ try {
     Set-ScenarioPath (Join-Path $WorkRoot 'probe') -RealHarness
     $probe = Invoke-App @('--self-test') 'probe'
     $haveHarness = ($probe.Out -match 'dsh state\s+:\s+FOUND') -and [bool](Get-Command node -ErrorAction SilentlyContinue)
+    # The entry file the app found, for scenarios that drive the CLI themselves.
+    $harnessEntry = if ($probe.Out -match 'dsh entry\s+:\s+([^\r\n]+)') { $Matches[1].Trim() } else { $null }
     Write-Host ("    harness CLI on this machine: {0}" -f $(if ($haveHarness) { 'yes' } else { 'no' }))
 
     # ---------------------------------------------------------------- scenario 1
@@ -452,6 +454,66 @@ try {
     }
     else {
         Write-Host '    SKIP  node is not on PATH'
+    }
+
+    # --------------------------------------------------------------- scenario 11
+    Write-Step '11. the served boot graph carries the plugin'
+    # Everything between "the plugin is installed in this home" and "the plugin
+    # runs in the page" happens in the graph the server injects into the page.
+    # A row the loader never emits, or a bundle route that answers 404, is
+    # invisible to the app - the UI simply has nothing to show. So this boots a
+    # real `dsh web` on a fixture home and asks the server what it serves.
+    if ($haveHarness -and $harnessEntry) {
+        $f11 = Join-Path $WorkRoot 's11'
+        New-Item -ItemType Directory -Force -Path $f11 | Out-Null
+        Set-ScenarioPath (Join-Path $WorkRoot 'probe') -RealHarness
+        $install = Invoke-App @('--install-plugin', '--dsh-home', $f11) 's11-install'
+        Assert-True ($install.Code -eq 0) 'the fixture home gets the bundled plugin'
+
+        $env:DSH_HOME = $f11
+        $serverOut = Join-Path $WorkRoot 's11-server.out.txt'
+        $serverErr = Join-Path $WorkRoot 's11-server.err.txt'
+        $server = $null
+        try {
+            $server = Start-Process -FilePath (Get-Command node).Source `
+                -ArgumentList @($harnessEntry, 'web', '--no-open', '--host', '127.0.0.1', '--port', '0') `
+                -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr `
+                -NoNewWindow -PassThru
+
+            $ready = $null
+            for ($i = 0; $i -lt 90 -and -not $ready -and -not $server.HasExited; $i++) {
+                Start-Sleep -Seconds 1
+                if (Test-Path -LiteralPath $serverOut) {
+                    $serverText = Get-Content -LiteralPath $serverOut -Raw
+                    if ($serverText -match 'dsh web:\s+(http://\S+)') { $ready = $Matches[1] }
+                }
+            }
+
+            Assert-True ([bool]$ready) 'the harness server prints its ready line'
+            if ($ready) {
+                $base = ($ready -split '\?')[0].TrimEnd('/')
+                $token = if ($ready -match 'token=([^&\s]+)') { $Matches[1] } else { '' }
+                $probeOut = Join-Path $WorkRoot 's11-probe.txt'
+                & node (Join-Path $root 'tools\boot-graph-probe.mjs') $base $token > $probeOut 2>&1
+                $probeCode = $LASTEXITCODE
+                $probeText = if (Test-Path -LiteralPath $probeOut) { Get-Content -LiteralPath $probeOut -Raw } else { '' }
+                $probePassed = if ($probeText -match '(\d+) passed') { [int]$Matches[1] } else { 0 }
+                Assert-True ($probeCode -eq 0) ("the served plugin is intact ({0} checks)" -f $probePassed)
+                Assert-Contains $probeText 'the graph has a row for dsh-plugin-desktop-updates' `
+                    'the boot graph names the plugin'
+                Assert-Contains $probeText 'the bundle route answers 200' 'the server serves the plugin bundle'
+                Assert-Contains $probeText 'the served bundle carries the id a list slot requires' `
+                    'the served bundle carries the id the sidebar entry needs'
+            }
+        }
+        finally {
+            if ($server -and -not $server.HasExited) {
+                Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    else {
+        Write-Host '    SKIP  no harness CLI on this machine'
     }
 }
 finally {
