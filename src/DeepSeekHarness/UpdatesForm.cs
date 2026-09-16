@@ -378,7 +378,9 @@ public sealed class UpdatesForm : Form
             Font = new Font("Segoe UI", 9f),
             Text = "@deepseek-ai/dsh is installed globally with npm. The app follows the 'latest' channel; "
                    + "'alpha' is shown for reference but is not installed automatically.\n\n"
-                   + "Installing stops the server and restarts the window, exactly like the tray action.",
+                   + "Installing stops the server and restarts the window, exactly like the tray action.\n\n"
+                   + "A new harness is verified by the next start: if a plugin cannot load on it, the app "
+                   + "disables that plugin, names it, and starts anyway.",
         };
         Add(grid, hint, 0, 3);
         grid.SetColumnSpan(hint, 2);

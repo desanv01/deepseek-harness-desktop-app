@@ -15,6 +15,14 @@ public sealed class BootState
     public string? ProjectDir { get; set; }
     public List<string> Bundles { get; set; } = new();
 
+    /**
+     * A harness version that was installed but has not yet booted. The next
+     * boot is what proves the plugin tree still loads on it, so until that
+     * happens the app can name the change if the boot fails.
+     */
+    public string? PendingHarnessVersion { get; set; }
+    public DateTime? PendingSinceUtc { get; set; }
+
     public static BootState Load()
     {
         try
@@ -222,12 +230,44 @@ public static class SafeMode
             state.LastGoodBootUtc = DateTime.UtcNow;
             state.ProjectDir = Options.Current?.ProjectDir;
             state.Bundles = HarnessProfile.ReadBundles(home);
+            // This boot is the verification: nothing is pending any more.
+            state.PendingHarnessVersion = null;
+            state.PendingSinceUtc = null;
             state.Save();
         }
         catch (Exception ex)
         {
             Log.Warn("could not record the boot state: " + ex.Message);
         }
+    }
+
+    /**
+     * Notes that a harness version was installed and has not booted yet. A
+     * harness update is the one change that can break a plugin the app did not
+     * touch, so the next boot has to be attributable to it.
+     */
+    public static void NoteHarnessUpdate(Tools tools, string? installedVersion)
+    {
+        try
+        {
+            var state = BootState.Load();
+            state.PendingHarnessVersion = installedVersion;
+            state.PendingSinceUtc = DateTime.UtcNow;
+            state.Save();
+            Log.Info($"harness {installedVersion ?? "?"} is installed; the next boot verifies the plugin tree "
+                     + $"(known good: {tools.DshVersion ?? "unknown"})");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not record the pending harness verification: " + ex.Message);
+        }
+    }
+
+    /** The pending harness version, when one is waiting to be verified. */
+    public static string? PendingHarnessVersion()
+    {
+        var state = BootState.Load();
+        return state.PendingHarnessVersion;
     }
 
     /** A sentence naming what changed since the last good boot, when anything did. */
@@ -246,6 +286,11 @@ public static class SafeMode
             && !string.Equals(state.HarnessVersion, tools.DshVersion, StringComparison.OrdinalIgnoreCase))
         {
             lines.Add($"the harness was updated from {state.HarnessVersion} to {tools.DshVersion}");
+        }
+        else if (!string.IsNullOrEmpty(state.PendingHarnessVersion)
+                 && !string.Equals(state.PendingHarnessVersion, tools.DshVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            lines.Add($"harness {state.PendingHarnessVersion} was installed, and this is the first boot since");
         }
 
         var bundles = HarnessProfile.ReadBundles(home);

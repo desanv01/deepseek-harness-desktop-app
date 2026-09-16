@@ -354,6 +354,12 @@ window.__ModuleLoader__.load({
 				h(Status, { text: harness.status || '' }),
 				h(
 					'div',
+					{ style: { opacity: 0.65, fontSize: '11.5px', marginTop: '6px' } },
+					'A new harness is verified by the next start. If a plugin cannot load on it, the app disables '
+						+ 'that plugin, says which one, and starts anyway.',
+				),
+				h(
+					'div',
 					{ style: { display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' } },
 					h(Button, {
 						onClick: () => action.run('harnessCheck', 'Reading npm ...'),

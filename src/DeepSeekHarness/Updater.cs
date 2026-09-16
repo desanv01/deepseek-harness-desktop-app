@@ -109,6 +109,10 @@ public static class Updater
             {
                 DeleteBackup(backup);
                 Log.Info("npm install finished and the dsh CLI validated successfully");
+                // A new harness can be incompatible with a plugin the loader
+                // applies at boot, so the next start is what verifies it - and it
+                // is recorded as such, so a failure there can be attributed.
+                SafeMode.NoteHarnessUpdate(refreshed, refreshed.DshVersion);
                 return new UpdateResult { Usable = true, ExitCode = code };
             }
 
