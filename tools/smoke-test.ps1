@@ -341,6 +341,28 @@ try {
         $r = Invoke-App @('--install-plugin', '--dsh-home', $f7) 's7b'
         Assert-Contains $r.Out 'already current' 'a second run is a no-op'
 
+        # The plugin is also installable from npm, so a boot must not undo a
+        # newer install with the copy inside the executable. The explicit
+        # command forces the bundled copy back, because that is what it is for.
+        $pluginManifest = Join-Path $f7 'profiles\web\node_modules\dsh-plugin-desktop-updates\package.json'
+        $newer = Get-Content -LiteralPath $pluginManifest -Raw | ConvertFrom-Json
+        $bundledVersion = $newer.version
+        $newer.version = '9.9.9'
+        $newer | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $pluginManifest -Encoding UTF8
+
+        $project7 = Join-Path $WorkRoot 's7-project'
+        New-Item -ItemType Directory -Force -Path $project7 | Out-Null
+        $r = Invoke-App @('--no-window', '--dsh-home', $f7, '--project', $project7, '--ready-timeout', '120') 's7-newer'
+        Assert-Contains $r.Out 'newer than the bundled' 'a newer plugin is reported at boot'
+        $keptVersion = (Get-Content -LiteralPath $pluginManifest -Raw | ConvertFrom-Json).version
+        Assert-True ($keptVersion -eq '9.9.9') 'a plugin newer than the bundled one is left in place'
+
+        $r = Invoke-App @('--install-plugin', '--dsh-home', $f7) 's7-force'
+        Assert-True ($r.Code -eq 0) 'the explicit install exits 0'
+        $restoredVersion = (Get-Content -LiteralPath $pluginManifest -Raw | ConvertFrom-Json).version
+        Assert-True ($restoredVersion -eq $bundledVersion) `
+            ("the explicit install puts the bundled {0} back" -f $bundledVersion)
+
         Write-Step '8. a plugin can be added, switched off and on, and removed'
         $plugin = Join-Path $WorkRoot 's8-plugin'
         New-Item -ItemType Directory -Force -Path $plugin | Out-Null

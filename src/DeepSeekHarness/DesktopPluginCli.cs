@@ -28,7 +28,7 @@ public static class DesktopPluginCli
             return 10;
         }
 
-        var error = DesktopPlugin.Ensure(home, tools, out var result);
+        var error = DesktopPlugin.Ensure(home, tools, out var result, force: true);
         Console.WriteLine($"result : {result.Describe()}");
         Console.WriteLine($"profile: {HarnessProfile.ManifestPath(home)}");
         Console.WriteLine($"bundles: {string.Join(", ", HarnessProfile.ReadBundles(home))}");

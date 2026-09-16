@@ -25,13 +25,16 @@ public static class DesktopPlugin
     private static readonly string[] Files = { "package.json", "cordis.patch.yml", "index.js", "client.js" };
 
     /** What happened the last time Ensure ran, for logs and for --install-plugin. */
-    public sealed record Result(bool Installed, bool Updated, bool AlreadyCurrent, string? Version, string? Error)
+    public sealed record Result(
+        bool Installed, bool Updated, bool AlreadyCurrent, string? Version, string? Error, string? KeptNewer = null)
     {
         public string Describe() => Error != null
             ? "failed: " + Error
-            : AlreadyCurrent
-                ? $"already current ({Version})"
-                : Updated ? $"updated to {Version}" : $"installed {Version}";
+            : KeptNewer != null
+                ? $"kept {KeptNewer} (newer than the bundled {Version})"
+                : AlreadyCurrent
+                    ? $"already current ({Version})"
+                    : Updated ? $"updated to {Version}" : $"installed {Version}";
     }
 
     /** The version of the plugin embedded in this build. */
@@ -58,9 +61,16 @@ public static class DesktopPlugin
 
     /**
      * Makes sure the given harness home runs the bundled plugin.
+     *
+     * A newer plugin than the bundled one is left alone unless `force` is set:
+     * the plugin is also installable from npm, and a boot that silently replaced
+     * a newer install with the copy in the executable would undo that on every
+     * launch. The explicit --install-plugin command forces it, because restoring
+     * the bundled copy is what someone running it is asking for.
+     *
      * Returns null on success, or a message describing what went wrong.
      */
-    public static string? Ensure(string home, Tools tools, out Result result)
+    public static string? Ensure(string home, Tools tools, out Result result, bool force = false)
     {
         result = new Result(false, false, false, null, null);
         try
@@ -83,6 +93,15 @@ public static class DesktopPlugin
 
             var modules = HarnessProfile.ModulesDir(home);
             var installedVersion = HarnessProfile.ReadPackageVersion(Path.Combine(modules, PackageName));
+            // `force` bypasses the newer-installed rule, not the version check:
+            // a forced run over the same version is still a no-op.
+            if (IsNewer(installedVersion, version) && !force)
+            {
+                Log.Info($"the home runs {PackageName} {installedVersion}, newer than the bundled {version}; leaving it");
+                result = new Result(false, false, false, version, null, installedVersion);
+                return null;
+            }
+
             if (!string.Equals(installedVersion, version, StringComparison.OrdinalIgnoreCase))
             {
                 var error = HarnessProfile.InstallPlugin(home, stage, PackageName, version);
@@ -113,6 +132,29 @@ public static class DesktopPlugin
             result = result with { Error = ex.Message };
             return ex.Message;
         }
+    }
+
+    /**
+     * Whether an installed version is ahead of the bundled one.
+     *
+     * Versions here are `major.minor.patch`, optionally with a prerelease tail.
+     * Anything that does not parse is not treated as newer: a version this does
+     * not understand is not a reason to keep a copy the app cannot vouch for.
+     */
+    private static bool IsNewer(string? installed, string bundled)
+    {
+        var left = ParseVersion(installed);
+        var right = ParseVersion(bundled);
+        return left != null && right != null && left > right;
+    }
+
+    private static Version? ParseVersion(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var core = text.Trim();
+        var dash = core.IndexOf('-');
+        if (dash >= 0) core = core[..dash];
+        return Version.TryParse(core, out var parsed) ? parsed : null;
     }
 
     /** Writes the embedded plugin files into the app's data directory. */
