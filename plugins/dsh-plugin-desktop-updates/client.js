@@ -556,7 +556,9 @@ window.__ModuleLoader__.load({
 			// the shell retires a failed injection without a word, so that report
 			// is the only place a rejected entry becomes visible.
 			const contribute = (slot, options, component) => {
+				let noted = false
 				const note = (error) => {
+					noted = true
 					const reason = (error && error.message) || String(error)
 					marker.failed.push(slot + ': ' + reason)
 					report('registering into ' + slot + ' failed: ' + reason)
@@ -579,9 +581,11 @@ window.__ModuleLoader__.load({
 					})
 				} catch (error) {
 					// A slot already declared when apply() runs fails here
-					// instead. That failure stays contained: the other half of
-					// the plugin is still worth installing, and the note above
-					// already put the reason in the app's log.
+					// instead, as does a wait that could not even be installed.
+					// The failure stays contained: the other half of the plugin
+					// is still worth having, and the note above is what the app
+					// reads.
+					if (!noted) note(error)
 				}
 			}
 
