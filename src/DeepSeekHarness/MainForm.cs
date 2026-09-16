@@ -718,6 +718,10 @@ public sealed class MainForm : Form, IBridgeHost
         {
             unchecked((int)0x8000FFFF) => "This machine refused to start the browser process. Usually the runtime is "
                                           + "missing, or the account cannot write its temporary files.",
+            unchecked((int)0x80080005) => "The browser process could not be started at all. A process-access policy "
+                                          + "(a restricted sandbox or an endpoint-protection rule) is the usual "
+                                          + "cause: the runtime's crash handler reports that opening its own parent "
+                                          + "process was denied.",
             unchecked((int)0x80070005) => "Access was denied - the user data folder below is not writable.",
             unchecked((int)0x80070002) or unchecked((int)0x80070003) =>
                 "A browser file could not be found; the WebView2 Runtime may be damaged or partially removed.",
