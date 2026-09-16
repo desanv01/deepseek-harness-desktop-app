@@ -683,7 +683,7 @@ public sealed class MainForm : Form, IBridgeHost
                 }
                 else
                 {
-                    SetStatus("WebView2 failed to initialize:\n" + args.InitializationException?.Message);
+                    SetStatus(DescribeBrowserFailure(args.InitializationException));
                 }
             };
 
@@ -691,9 +691,45 @@ public sealed class MainForm : Form, IBridgeHost
         }
         catch (Exception ex)
         {
-            SetStatus("Could not start the embedded browser:\n" + ex.Message +
-                      "\n\nInstall the WebView2 Runtime (Evergreen):\nhttps://go.microsoft.com/fwlink/p/?LinkId=2124703");
+            SetStatus(DescribeBrowserFailure(ex));
         }
+    }
+
+    /**
+     * A WebView2 failure that names itself. The exception is usually a bare
+     * COM error ("Catastrophic failure"), and the reason - a blocked temp
+     * directory, a locked user data folder, a missing runtime - is in the
+     * HRESULT or the inner exception. Both are reported, and logged with the
+     * folder the browser was asked to use.
+     */
+    private string DescribeBrowserFailure(Exception? ex)
+    {
+        var chain = new List<string>();
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            chain.Add(current.Message);
+        }
+
+        var hresult = ex?.HResult ?? 0;
+        Log.Error($"the embedded browser could not start: {string.Join(" <- ", chain)} "
+                  + $"(hresult 0x{hresult:X8}, user data folder {_userDataDir})");
+
+        var hint = hresult switch
+        {
+            unchecked((int)0x8000FFFF) => "This machine refused to start the browser process. Usually the runtime is "
+                                          + "missing, or the account cannot write its temporary files.",
+            unchecked((int)0x80070005) => "Access was denied - the user data folder below is not writable.",
+            unchecked((int)0x80070002) or unchecked((int)0x80070003) =>
+                "A browser file could not be found; the WebView2 Runtime may be damaged or partially removed.",
+            _ => "Install or repair the WebView2 Runtime (Evergreen).",
+        };
+
+        return "Could not start the embedded browser:\n"
+               + string.Join("\n", chain.Take(3))
+               + $"\n\n(0x{hresult:X8})\n{hint}\n\n"
+               + $"Data folder:\n{_userDataDir}\n\n"
+               + "Runtime (Evergreen): https://go.microsoft.com/fwlink/p/?LinkId=2124703\n"
+               + "Run DeepSeekHarness.exe --self-test to see the runtime it finds.";
     }
 
     private async void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
@@ -713,12 +749,67 @@ public sealed class MainForm : Form, IBridgeHost
             }
             SetStatus(string.Empty); // hide overlay
             UpdateBadge();
+            await ReportPluginStateAsync();
             _ = StartBackgroundChecksAsync();
             await MeasurePageBackgroundAsync();
         }
         catch (Exception ex)
         {
             SetStatus("The DeepSeek Harness page could not be verified:\n" + ex.Message);
+        }
+    }
+
+    /**
+     * Asks the page what the updates plugin did.
+     *
+     * The plugin's browser half publishes a marker with what it registered and
+     * whether it found the bridge. Without reading it back, a plugin whose UI
+     * does not appear looks identical to one that never loaded - the harness
+     * host reports nothing either way - and the only evidence would be a
+     * screenshot with a missing button.
+     */
+    private async Task ReportPluginStateAsync()
+    {
+        // The plugin loads as part of the page's own boot, which runs after the
+        // navigation completes, so the marker can still be absent on the first
+        // look. Poll briefly and keep the last answer.
+        var marker = (string?)null;
+        for (var attempt = 0; attempt < 12; attempt++)
+        {
+            try
+            {
+                var core = _web?.CoreWebView2;
+                if (core == null) return;
+
+                var json = await core.ExecuteScriptAsync(
+                    "JSON.stringify(window.__dshDesktopUpdates || null)");
+                if (!string.IsNullOrEmpty(json) && json != "null")
+                {
+                    // ExecuteScriptAsync returns a JSON-encoded string, so this
+                    // is the marker as text inside a JSON string.
+                    marker = JsonSerializer.Deserialize<string>(json);
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("could not read the plugin marker from the page: " + ex.Message);
+                return;
+            }
+
+            await Task.Delay(500);
+        }
+
+        if (marker == null)
+        {
+            Log.Warn("the updates plugin never reported itself in the page: the bundled client half did not load");
+            return;
+        }
+
+        Log.Info("updates plugin in the page: " + marker);
+        foreach (var problem in DesktopBridge.ReadPluginMarker(marker))
+        {
+            Log.Warn(problem);
         }
     }
 

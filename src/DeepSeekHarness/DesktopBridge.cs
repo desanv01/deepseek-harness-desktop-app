@@ -118,6 +118,50 @@ public static class DesktopBridge
             // no host: the API stays present but every call reports it
           }
 
+          /*
+            Report page errors and console warnings/errors to the app. A DSH
+            plugin that fails in the browser is otherwise invisible: the harness
+            host logs nothing and the window just shows less UI than it should.
+          */
+          (function () {
+            function report(level, message, source, line) {
+              try {
+                post({
+                  dsh: VERSION,
+                  id: 0,
+                  method: 'pageLog',
+                  params: {
+                    level: level,
+                    message: String(message).slice(0, 800),
+                    source: String(source || '').slice(0, 200),
+                    line: typeof line === 'number' ? line : 0
+                  }
+                });
+              } catch (error) { }
+            }
+            function describe(value) {
+              try {
+                return typeof value === 'string' ? value : JSON.stringify(value);
+              } catch (error) {
+                return String(value);
+              }
+            }
+            window.addEventListener('error', function (event) {
+              report('error', (event && event.message) || 'script error', (event && event.filename) || '', event && event.lineno);
+            });
+            window.addEventListener('unhandledrejection', function (event) {
+              var reason = event && event.reason;
+              report('error', 'unhandled rejection: ' + describe((reason && reason.message) || reason), '', 0);
+            });
+            ['warn', 'error'].forEach(function (level) {
+              var original = console[level];
+              console[level] = function () {
+                report(level, Array.prototype.map.call(arguments, describe).join(' '), '', 0);
+                return original.apply(console, arguments);
+              };
+            });
+          })();
+
           window.__dshDesktop = {
             version: VERSION,
             appVersion: '__APP_VERSION__',
@@ -203,6 +247,7 @@ public static class DesktopBridge
                     .ConfigureAwait(false),
                 "installPlugin" => await host.InstallPluginAsync(StringParam(request.Params, "spec")).ConfigureAwait(false),
                 "removePlugin" => await host.RemovePluginAsync(StringParam(request.Params, "name")).ConfigureAwait(false),
+                "pageLog" => PageLog(request.Params),
                 "open" => Open(host),
                 _ => throw new InvalidOperationException($"unknown bridge method '{request.Method}'"),
             };
@@ -223,6 +268,29 @@ public static class DesktopBridge
     {
         host.OpenNativeWindow();
         return new { opened = true };
+    }
+
+    /**
+     * A page error or console line, from the injected reporter. Errors and
+     * warnings are logged as warnings - they are usually a plugin explaining
+     * that it could not do something.
+     */
+    private static object? PageLog(JsonElement parameters)
+    {
+        var level = StringParam(parameters, "level");
+        var message = StringParam(parameters, "message");
+        var source = StringParam(parameters, "source");
+        var where = source.Length == 0 ? "" : $" ({source})";
+
+        if (level is "error" or "warn" or "warning")
+        {
+            Log.Warn($"page {level}: {message}{where}");
+        }
+        else
+        {
+            Log.Info($"page {level}: {message}{where}");
+        }
+        return new { ok = true };
     }
 
     public static string Reply(int id, object? result, string? error)
@@ -278,6 +346,48 @@ public static class DesktopBridge
     /** The plugin list a state snapshot carries: what this home runs. */
     public static (List<PluginEntry> Entries, bool CanManage) ReadPlugins(string home)
         => (HarnessProfile.ReadPlugins(home), HarnessProfile.CanManagePlugins);
+
+    /**
+     * Reads the updates plugin's marker into the problems it reports.
+     *
+     * The shell drops a rejected slot registration without telling anyone: the
+     * entry simply never renders. The plugin records what it registered and what
+     * the shell refused in `window.__dshDesktopUpdates`, which is the only
+     * account of a browser half that loaded but could not appear.
+     *
+     * @param marker - the marker as JSON text, as read back from the page.
+     * @returns one message per problem, empty when the plugin is intact.
+     */
+    public static List<string> ReadPluginMarker(string marker)
+    {
+        var problems = new List<string>();
+        try
+        {
+            using var document = JsonDocument.Parse(marker);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("registered", out var registered)
+                && registered.ValueKind == JsonValueKind.Array
+                && registered.GetArrayLength() == 0)
+            {
+                problems.Add("the updates plugin loaded but registered nothing: its UI cannot appear");
+            }
+
+            if (root.TryGetProperty("failed", out var failed) && failed.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in failed.EnumerateArray())
+                {
+                    problems.Add("the updates plugin could not register " + (entry.GetString() ?? "a slot"));
+                }
+            }
+        }
+        catch (JsonException ex)
+        {
+            problems.Add("the updates plugin marker could not be read: " + ex.Message);
+        }
+
+        return problems;
+    }
 
     /**
      * --bridge-selftest: exercises the protocol without a browser, which is the
@@ -343,6 +453,16 @@ public static class DesktopBridge
 
         var progress = ProgressEvent(new UpdateProgress("downloading", 50, 200));
         Check(progress.Contains("\"percent\":25", StringComparison.Ordinal), "progress carries a percentage");
+
+        Check(ReadPluginMarker("{\"registered\":[\"sidebar.footer.action\"],\"failed\":[]}").Count == 0,
+            "a plugin that registered its slots reports nothing wrong");
+        var silent = ReadPluginMarker("{\"registered\":[],\"failed\":[]}");
+        Check(silent.Count == 1 && silent[0].Contains("registered nothing", StringComparison.Ordinal),
+            "a plugin that registered nothing is reported");
+        var refused = ReadPluginMarker("{\"registered\":[\"settings.section\"],\"failed\":[\"sidebar.footer.action: list slot requires options.id\"]}");
+        Check(refused.Count == 1 && refused[0].Contains("list slot requires options.id", StringComparison.Ordinal),
+            "a refused registration is reported with its reason");
+        Check(ReadPluginMarker("not json").Count == 1, "an unreadable marker is reported, not thrown");
 
         Console.WriteLine($"== {passed} passed, {failed} failed ==");
         return failed == 0 ? 0 : 1;
