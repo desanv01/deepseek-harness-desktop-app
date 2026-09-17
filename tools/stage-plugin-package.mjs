@@ -53,6 +53,23 @@ mkdirSync(out, { recursive: true })
 for (const entry of manifest.files) {
   cpSync(join(source, entry), join(out, entry), { recursive: true })
 }
+
+/*
+ * npm always ships a LICENSE when one is in the package directory, and the
+ * registry page links it. The bundled copy has no licence file of its own - the
+ * repository root carries the one that covers it - so the nearest LICENSE is
+ * staged: the plugin's, if it ever gets one, otherwise the repository's.
+ */
+for (const candidate of [join(source, 'LICENSE'), join(source, '..', '..', 'LICENSE')]) {
+  try {
+    cpSync(candidate, join(out, 'LICENSE'))
+    console.log('license: ' + candidate)
+    break
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+}
+
 writeFileSync(join(out, 'package.json'), JSON.stringify(staged, null, 2) + '\n')
 
 console.log(`${staged.name}@${staged.version} staged in ${out}`)
