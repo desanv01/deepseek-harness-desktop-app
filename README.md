@@ -162,7 +162,9 @@ node tools\stage-plugin-package.mjs plugins\dsh-plugin-desktop-updates plugin-ou
 cd plugin-out; npm publish --access public
 ```
 
-`.github/workflows/publish-plugin.yml` does exactly that on demand. Bump the version in `plugins\dsh-plugin-desktop-updates\package.json`, merge it, then run the workflow with the same version: it refuses a version the manifest does not declare and one that is already published. It needs an `NPM_TOKEN` repository secret (an npm automation token) and says so when the secret is missing.
+`.github/workflows/publish-plugin.yml` does exactly that on demand. Bump the version in `plugins\dsh-plugin-desktop-updates\package.json`, merge it, then run the workflow with the same version: it refuses a version the manifest does not declare and one that is already published. It needs an `NPM_TOKEN` repository secret and says so when the secret is missing.
+
+npm requires two-factor authentication to publish, and that decides who may perform the first one. A local `npm publish` needs a one-time password (`npm publish --access public --otp=<code>`) unless the credentials are a token allowed to bypass 2FA — a classic Automation token, or a granular token with the bypass option enabled. A granular token can only be scoped to a package that already exists, so the first publish runs on an account-wide token; a token scoped to `dsh-plugin-desktop-updates` replaces it once the package is on the registry. The registry answers a publish without either with `403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.`
 
 ### Cutting a release
 
