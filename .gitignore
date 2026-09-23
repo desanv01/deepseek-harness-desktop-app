@@ -3,6 +3,8 @@ dist/
 release/
 src/**/bin/
 src/**/obj/
+# the staging directory tools/stage-plugin-package.mjs writes for a publish
+plugin-out/
 
 # Local scratch
 .testhome/

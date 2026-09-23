@@ -45,9 +45,14 @@ jobs:
             echo "::error::the plugin manifest says $manifest, not ${{ inputs.version }}"
             exit 1
           fi
-          if npm view "dsh-plugin-desktop-updates@${{ inputs.version }}" version >/dev/null 2>&1; then
-            echo "::error::dsh-plugin-desktop-updates@${{ inputs.version }} is already published"
-            exit 1
+          # Only a real publish is blocked by a version that already exists: a
+          # dry run packs the same tree, and is how the pipeline is checked
+          # before anything reaches the registry.
+          if [ "${{ inputs.dry_run }}" != "true" ]; then
+            if npm view "dsh-plugin-desktop-updates@${{ inputs.version }}" version >/dev/null 2>&1; then
+              echo "::error::dsh-plugin-desktop-updates@${{ inputs.version }} is already published"
+              exit 1
+            fi
           fi
 
       # The repository copy is private and carries the app's own files; the
