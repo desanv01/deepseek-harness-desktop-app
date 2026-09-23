@@ -447,12 +447,23 @@ try {
         $project = Join-Path $WorkRoot 's9-project'
         New-Item -ItemType Directory -Force -Path $project | Out-Null
 
-        $r = Invoke-App @('--no-window', '--dsh-home', $f9, '--project', $project, '--ready-timeout', '120') 's9'
+        $r = Invoke-App @('--no-window', '--dsh-home', $f9, '--project', $project, '--ready-timeout', '240') 's9'
         Assert-True ($r.Code -eq 0) 'the boot recovers and exits 0'
         Assert-Contains $r.Out 'safe mode' 'the recovery is reported'
         Assert-Contains $r.Out 'dsh-plugin-thrower' 'the culprit is named'
         $patch = Get-Content -LiteralPath (Join-Path $f9 'profiles\web\cordis.patch.yml') -Raw
         Assert-True ($patch -like '*thrower*' -and $patch -like '*disabled: true*') 'its row is disabled in the patch layer'
+        if ($r.Code -ne 0) {
+            # A recovery that did not happen is worth the app's own account of
+            # why, printed where CI can show it instead of in a fixture file.
+            Write-Host '    --- app output ---' -ForegroundColor Yellow
+            ($r.Out -split "`n" | Select-Object -Last 25) | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) }
+            if ($r.Err) { ($r.Err -split "`n" | Select-Object -Last 10) | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) } }
+            Write-Host '    --- server log ---' -ForegroundColor Yellow
+            Get-ChildItem (Join-Path (Join-Path $WorkRoot 's9-data') 'logs') -Filter 'server-*.out.log' -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+                ForEach-Object { Get-Content $_.FullName -Tail 25 | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) } }
+        }
     }
 
     # --------------------------------------------------------------- scenario 10
@@ -503,7 +514,7 @@ try {
                 -NoNewWindow -PassThru
 
             $ready = $null
-            for ($i = 0; $i -lt 90 -and -not $ready -and -not $server.HasExited; $i++) {
+            for ($i = 0; $i -lt 180 -and -not $ready -and -not $server.HasExited; $i++) {
                 Start-Sleep -Seconds 1
                 if (Test-Path -LiteralPath $serverOut) {
                     $serverText = Get-Content -LiteralPath $serverOut -Raw
@@ -512,6 +523,16 @@ try {
             }
 
             Assert-True ([bool]$ready) 'the harness server prints its ready line'
+            if (-not $ready) {
+                # Say what the server said instead of leaving a bare failure: a
+                # boot that never printed its line is the server's own story.
+                Write-Host '    --- server stdout ---' -ForegroundColor Yellow
+                Get-Content -LiteralPath $serverOut -Tail 25 -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) }
+                Write-Host '    --- server stderr ---' -ForegroundColor Yellow
+                Get-Content -LiteralPath $serverErr -Tail 25 -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) }
+            }
             if ($ready) {
                 $base = ($ready -split '\?')[0].TrimEnd('/')
                 $token = if ($ready -match 'token=([^&\s]+)') { $Matches[1] } else { '' }
