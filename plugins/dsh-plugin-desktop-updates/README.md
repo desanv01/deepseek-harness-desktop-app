@@ -19,12 +19,25 @@ the harness home it owns. Installing from npm replaces that copy with the
 published one:
 
 ```sh
-dsh plugin add dsh-plugin-desktop-updates
+dsh plugin --profile web add dsh-plugin-desktop-updates
 ```
+
+The same install from the app is **Settings → Updates → the plugin manager**,
+which takes the package name, a git spec, or a local folder.
 
 The app leaves an installed version alone when it is newer than the copy in the
 executable, so a newer npm release is not undone by the next launch;
 `DeepSeekHarness.exe --install-plugin` restores the bundled copy deliberately.
+
+## Releases
+
+Versions are published from this repository's
+[`publish-plugin.yml`](https://github.com/desanv01/deepseek-harness-desktop-app/blob/main/.github/workflows/publish-plugin.yml)
+workflow with npm trusted publishing: GitHub proves which workflow is running
+over OpenID Connect, and npm issues a short-lived credential in exchange. No
+long-lived npm token exists for this package, so a release is a version bump and
+one workflow run. Trusted publishing makes the registry attach a provenance
+attestation to each release, which the package page shows.
 
 ## What it contributes
 
