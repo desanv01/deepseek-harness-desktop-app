@@ -8,6 +8,11 @@ name: Publish the plugin
 # plugins/dsh-plugin-desktop-updates/package.json, merge that, then run this with
 # the same version - a mismatch fails instead of publishing something the
 # source does not say.
+#
+# Two ways to authenticate, and the choice matters for the first publish. A
+# trusted publisher is configured on a package's own settings page, so it cannot
+# exist before the package does: the first version needs a token, and every
+# version after it can use OIDC with no secret at all.
 
 on:
   workflow_dispatch:
@@ -19,9 +24,19 @@ on:
         description: 'Pack and report the tarball without publishing it'
         type: boolean
         default: false
+      method:
+        description: 'How to authenticate with the registry'
+        type: choice
+        default: token-with-bypass-2fa
+        options:
+          - token-with-bypass-2fa
+          - trusted-publishing-oidc
 
 permissions:
   contents: read
+  # Trusted publishing: the runner proves which workflow it is to npm with an
+  # OIDC token, so no shared secret exists to leak or rotate.
+  id-token: write
 
 jobs:
   publish:
@@ -36,6 +51,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
 
       - name: Check the version against the plugin manifest
         run: |
@@ -64,14 +80,29 @@ jobs:
         working-directory: plugin-out
         run: npm pack
 
-      - name: Publish
-        if: ${{ !inputs.dry_run }}
+      - name: Publish with a token
+        if: ${{ !inputs.dry_run && inputs.method == 'token-with-bypass-2fa' }}
         working-directory: plugin-out
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # A granular token with "Bypass 2FA" enabled, account-wide for the
+          # first publish and scoped to the package afterwards: npm refuses a
+          # publish that has neither a one-time password nor such a token.
           if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::add an NPM_TOKEN repository secret (an npm automation token) to publish"
+            echo "::error::no NPM_TOKEN secret: create a granular token with bypass 2FA, or publish with trusted publishing"
             exit 1
           fi
+          npm publish --access public
+
+      - name: Publish with trusted publishing
+        if: ${{ !inputs.dry_run && inputs.method == 'trusted-publishing-oidc' }}
+        working-directory: plugin-out
+        run: |
+          # Trusted publishing needs npm 11.5.1 or later, which the runner's
+          # bundled npm may predate. No NODE_AUTH_TOKEN is set here on purpose:
+          # the npm CLI detects the OIDC environment and exchanges the runner's
+          # identity for a short-lived credential.
+          npm install -g npm@latest
+          npm --version
           npm publish --access public

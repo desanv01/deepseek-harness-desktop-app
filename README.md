@@ -162,7 +162,14 @@ node tools\stage-plugin-package.mjs plugins\dsh-plugin-desktop-updates plugin-ou
 cd plugin-out; npm publish --access public
 ```
 
-`.github/workflows/publish-plugin.yml` does exactly that on demand. Bump the version in `plugins\dsh-plugin-desktop-updates\package.json`, merge it, then run the workflow with the same version: it refuses a version the manifest does not declare and one that is already published. It needs an `NPM_TOKEN` repository secret and says so when the secret is missing.
+`.github/workflows/publish-plugin.yml` does exactly that on demand. Bump the version in `plugins\dsh-plugin-desktop-updates\package.json`, merge it, then run the workflow with the same version: it refuses a version the manifest does not declare and one that is already published. It takes a `method` input, and the two are not interchangeable for the first release:
+
+- **`token-with-bypass-2fa`** reads the `NPM_TOKEN` repository secret. npm refuses a publish that carries neither a one-time password nor a token allowed to bypass two-factor authentication, and a token that bypasses it is the only option for CI.
+- **`trusted-publishing-oidc`** uses no secret at all: the runner proves which workflow it is over OpenID Connect, and npm exchanges that for a short-lived credential. It needs the workflow's `id-token: write` permission (already set), npm 11.5.1 or later (the step installs the current one), and a trusted publisher configured for the package on npmjs.com.
+
+A trusted publisher is configured on a package's own settings page, so it cannot exist before the package does. The first release therefore runs on a token — account-wide, because a granular token can only be scoped to a package that already exists — and a token scoped to `dsh-plugin-desktop-updates` replaces it, or is dropped entirely once a trusted publisher is configured for this workflow.
+
+npm answers a publish without either credential with `403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.`, and, separately, npm's own CLI prefers the session token `npm login` leaves in `.npmrc` over a bypass token, which fails the same way. Writing the bypass token into `.npmrc` by hand is the documented way around that; the CI path has no session token to conflict with.
 
 npm requires two-factor authentication to publish, and that decides who may perform the first one. A local `npm publish` needs a one-time password (`npm publish --access public --otp=<code>`) unless the credentials are a token allowed to bypass 2FA — a classic Automation token, or a granular token with the bypass option enabled. A granular token can only be scoped to a package that already exists, so the first publish runs on an account-wide token; a token scoped to `dsh-plugin-desktop-updates` replaces it once the package is on the registry. The registry answers a publish without either with `403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.`
 
