@@ -225,6 +225,46 @@ try {
     $harnessEntry = if ($probe.Out -match 'dsh entry\s+:\s+([^\r\n]+)') { $Matches[1].Trim() } else { $null }
     Write-Host ("    harness CLI on this machine: {0}" -f $(if ($haveHarness) { 'yes' } else { 'no' }))
 
+    # A CLI that answers --version is not automatically one that can boot: a
+    # release whose dependencies float can install a tree that fails to resolve
+    # its own plugin rows, which is a broken harness, not a broken app. The
+    # scenarios that need a server boot are gated on this probe.
+    $harnessBoots = $false
+    $harnessBootError = ''
+    if ($haveHarness -and $harnessEntry) {
+        $probeHome = Join-Path $WorkRoot 'boot-probe-home'
+        New-Item -ItemType Directory -Force -Path $probeHome | Out-Null
+        $env:DSH_HOME = $probeHome
+        $probeOut = Join-Path $WorkRoot 'boot-probe.out.txt'
+        $probeErr = Join-Path $WorkRoot 'boot-probe.err.txt'
+        $server = $null
+        try {
+            $server = Start-Process -FilePath (Get-Command node).Source `
+                -ArgumentList @($harnessEntry, 'web', '--no-open', '--host', '127.0.0.1', '--port', '0') `
+                -RedirectStandardOutput $probeOut -RedirectStandardError $probeErr `
+                -NoNewWindow -PassThru
+            for ($i = 0; $i -lt 60 -and -not $server.HasExited; $i++) {
+                Start-Sleep -Seconds 1
+                if ((Test-Path -LiteralPath $probeOut) -and
+                    (Get-Content -LiteralPath $probeOut -Raw) -match 'dsh web:\s+http://') {
+                    $harnessBoots = $true
+                    break
+                }
+            }
+            if (-not $harnessBoots) {
+                $harnessBootError = ((Get-Content -LiteralPath $probeErr -Tail 12 -ErrorAction SilentlyContinue) -join ' ') -replace '\s+', ' '
+            }
+        }
+        finally {
+            if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    Write-Host ("    harness can boot a server: {0}" -f $(if ($harnessBoots) { 'yes' } else { 'no' }))
+    if ($haveHarness -and -not $harnessBoots) {
+        Write-Host '    the harness CLI on this machine cannot start a server; scenarios that need one will skip'
+        if ($harnessBootError) { Write-Host ('    harness error: ' + $harnessBootError) -ForegroundColor Yellow }
+    }
+
     # ---------------------------------------------------------------- scenario 1
     Write-Step '1. a shim on PATH names the CLI, so the app finds it'
     $f1 = Join-Path $WorkRoot 's1'
@@ -412,6 +452,12 @@ try {
         Assert-True ($manifest8 -notlike '*dsh-plugin-smoke*') 'it is gone from the bundle stack'
 
         Write-Step '9. a plugin that cannot load is disabled automatically'
+        # The recovery is the app's answer to a server that refuses to boot, so
+        # it means nothing on a machine whose harness cannot boot at all.
+        if (-not $harnessBoots) {
+            Write-Host '    SKIP  this machine''s harness CLI cannot start a server'
+        }
+        else {
         $f9 = Join-Path $WorkRoot 's9-home'
         $thrower = Join-Path $f9 'profiles\web\node_modules\dsh-plugin-thrower'
         New-Item -ItemType Directory -Force -Path $thrower | Out-Null
@@ -464,6 +510,7 @@ try {
                 Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
                 ForEach-Object { Get-Content $_.FullName -Tail 25 | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) } }
         }
+        }
     }
 
     # --------------------------------------------------------------- scenario 10
@@ -496,7 +543,7 @@ try {
     # A row the loader never emits, or a bundle route that answers 404, is
     # invisible to the app - the UI simply has nothing to show. So this boots a
     # real `dsh web` on a fixture home and asks the server what it serves.
-    if ($haveHarness -and $harnessEntry) {
+    if ($haveHarness -and $harnessEntry -and $harnessBoots) {
         $f11 = Join-Path $WorkRoot 's11'
         New-Item -ItemType Directory -Force -Path $f11 | Out-Null
         Set-ScenarioPath (Join-Path $WorkRoot 'probe') -RealHarness
@@ -556,7 +603,8 @@ try {
         }
     }
     else {
-        Write-Host '    SKIP  no harness CLI on this machine'
+        Write-Host $(if ($haveHarness) { '    SKIP  this machine''s harness CLI cannot start a server' }
+                      else { '    SKIP  no harness CLI on this machine' })
     }
 }
 finally {

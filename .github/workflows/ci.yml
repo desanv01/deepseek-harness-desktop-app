@@ -81,10 +81,17 @@ jobs:
           # The plugin scenarios need a real harness CLI to initialize profiles.
           # A runner that cannot install it skips those scenarios instead of
           # failing: they are covered locally, and this step is an upgrade.
-          npm install -g @deepseek-ai/dsh@0.1.5-rc.1 --no-audit --no-fund --loglevel=error
+          #
+          # The release channel rather than a pinned version, because a pinned
+          # prerelease resolves its own dependencies by range: 0.1.5-rc.1 now
+          # installs a tree whose plugin rows cannot be resolved, which is a
+          # broken harness rather than a broken app. The suite probes whether the
+          # CLI can boot a server and skips the scenarios that need one.
+          npm install -g @deepseek-ai/dsh@latest --no-audit --no-fund --loglevel=error
           if ($LASTEXITCODE -ne 0) {
             Write-Host '::warning::the harness CLI could not be installed; the plugin scenarios will skip'
           }
+          dsh --version
           exit 0
 
       - name: Smoke test the harness CLI handling
