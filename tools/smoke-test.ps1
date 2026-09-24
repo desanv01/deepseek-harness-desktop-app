@@ -606,6 +606,27 @@ try {
         Write-Host $(if ($haveHarness) { '    SKIP  this machine''s harness CLI cannot start a server' }
                       else { '    SKIP  no harness CLI on this machine' })
     }
+
+    # --------------------------------------------------------------- scenario 12
+    Write-Step '12. the page bridge reads what the page actually sends'
+    # The page posts JSON.stringify(...), so the app is handed a JSON string that
+    # contains the request. A bridge that only understood the object form ignored
+    # every real message while its own tests stayed green, so both shapes are
+    # asserted here, in the suite CI runs.
+    $bridge = Invoke-App @('--bridge-selftest') 'bridge'
+    $bridgeText = $bridge.Out
+    $bridgePassed = if ($bridgeText -match '(\d+) passed') { [int]$Matches[1] } else { 0 }
+    Assert-True ($bridge.Code -eq 0) ("the bridge self test exits 0 ({0} checks)" -f $bridgePassed)
+    Assert-Contains $bridgeText 'a request sent the way the page sends it - stringified - parses' `
+        'a request in the shape the page sends is understood'
+    Assert-Contains $bridgeText 'it reaches the host like any other request' `
+        'that request reaches the host'
+    Assert-Contains $bridgeText 'the badge''s stringified click is recognized' `
+        'the badge message is understood'
+    Assert-Contains $bridgeText 'a plugin install naming the package is not mistaken for the badge' `
+        'a request is not mistaken for the badge'
+    Assert-Contains $bridgeText 'the payload is unwrapped from a stringified message' `
+        'a stringified message is unwrapped'
 }
 finally {
     Reset-Environment

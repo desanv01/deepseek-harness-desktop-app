@@ -198,13 +198,46 @@ public static class DesktopBridge
     /** One parsed request from the page. */
     public sealed record Request(int Id, string Method, JsonElement Params);
 
+    /**
+     * The JSON payload a page message carries, whichever way the page sent it.
+     *
+     * A page that posts an object arrives as that object's JSON. A page that
+     * posts `JSON.stringify(payload)` - which is what this bridge's own client
+     * half does, and the only way to send a structured message from a page that
+     * may run where `structuredClone` does not - arrives as a JSON *string*
+     * containing that JSON, because WebView2 reports the message through
+     * `WebMessageAsJson`. Both shapes are unwrapped here so every caller sees
+     * one payload, and a message that is neither is reported as unreadable
+     * rather than silently dropped.
+     *
+     * @param webMessageAsJson - the message as the WebView2 event reports it.
+     * @returns the payload JSON, or null when the message carries none.
+     */
+    public static string? Payload(string? webMessageAsJson)
+    {
+        if (string.IsNullOrWhiteSpace(webMessageAsJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(webMessageAsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.String) return webMessageAsJson;
+            var inner = root.GetString();
+            return string.IsNullOrWhiteSpace(inner) ? null : inner;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     /** Parses a page message; null when it is not a bridge request this version handles. */
     public static Request? Parse(string? json)
     {
-        if (string.IsNullOrWhiteSpace(json)) return null;
+        var payload = Payload(json);
+        if (payload == null) return null;
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(payload);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return null;
             if (!root.TryGetProperty("dsh", out var version) || version.ValueKind != JsonValueKind.Number) return null;
@@ -219,6 +252,50 @@ public static class DesktopBridge
         {
             return null;
         }
+    }
+
+    /**
+     * Whether a page message is the in-page badge asking for the updates window.
+     *
+     * The badge is the one message that is not a bridge request: it posts
+     * `{"type":"dsh-desktop-updates"}`, as a string, and predates the protocol.
+     * It is matched on its own field rather than on a substring of the raw
+     * message, so a request that merely mentions the package name cannot be
+     * mistaken for it.
+     *
+     * @param json - the message as the WebView2 event reports it.
+     * @returns true when the page asked for the updates window.
+     */
+    public static bool IsBadgeClick(string? json)
+    {
+        var payload = Payload(json);
+        if (string.IsNullOrWhiteSpace(payload)) return false;
+        var text = payload.Trim();
+        if (string.Equals(text, BadgeMessage, StringComparison.Ordinal)) return true;
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                   && root.TryGetProperty("type", out var type)
+                   && type.ValueKind == JsonValueKind.String
+                   && string.Equals(type.GetString(), BadgeMessage, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /** The badge's message type, and a short preview for logs. */
+    public const string BadgeMessage = "dsh-desktop-updates";
+
+    /** A one-line, bounded preview of a page message, for a log line. */
+    public static string Preview(string? json, int limit = 200)
+    {
+        if (string.IsNullOrEmpty(json)) return "(empty)";
+        var text = json.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return text.Length <= limit ? text : text[..limit] + "…";
     }
 
     /**
@@ -430,9 +507,52 @@ public static class DesktopBridge
         Check(parsed is { Id: 7, Method: "check" }, "a well-formed request parses");
 
         var host = new StubHost();
+
+        /*
+          The shape the page actually sends. A page posts `JSON.stringify(...)`,
+          so WebView2 hands the app a JSON string containing the request, not the
+          request itself. Testing only the object form is what let a bridge that
+          ignored every real message pass this suite for as long as it existed.
+        */
+        var pageRequest = $"{{\"dsh\":{Version},\"id\":11,\"method\":\"harnessCheck\",\"params\":{{}}}}";
+        var asPageSendsIt = JsonSerializer.Serialize(pageRequest);
+        Check(Parse(asPageSendsIt) is { Id: 11, Method: "harnessCheck" },
+            "a request sent the way the page sends it - stringified - parses");
+        Check(Parse(pageRequest) is { Id: 11, Method: "harnessCheck" },
+            "the same request as a raw object still parses");
+        Check(Payload(asPageSendsIt) == pageRequest, "the payload is unwrapped from a stringified message");
+        Check(Payload(pageRequest) == pageRequest, "an object message is its own payload");
+        Check(Payload("\"\\\"nested\\\"\"") == "\"nested\"", "only one layer of string encoding is unwrapped");
+        Check(Payload(null) == null && Payload("   ") == null && Payload("not json") == null,
+            "an empty or malformed message carries no payload");
+
+        var pageParsed = Parse(asPageSendsIt)!;
+        var pageReply = DispatchAsync(pageParsed, host, null, CancellationToken.None).GetAwaiter().GetResult();
+        Check(pageReply.Contains("\"id\":11", StringComparison.Ordinal),
+            "a request sent the way the page sends it is answered with its id");
+        Check(host.Calls.Contains("harnessCheck"), "it reaches the host like any other request");
+        Check(Parse(JsonSerializer.Serialize("{\"dsh\":1,\"id\":1,\"method\":\"open\"}")) is { Method: "open" },
+            "the sidebar entry's own call parses too");
+
+        Check(IsBadgeClick(JsonSerializer.Serialize("{\"type\":\"dsh-desktop-updates\"}")),
+            "the badge's stringified click is recognized");
+        // A page that posts a bare string reaches the app JSON-encoded, so this
+        // is the form that stands for "the page sent only the marker".
+        Check(IsBadgeClick(JsonSerializer.Serialize(BadgeMessage)),
+            "the badge's bare string, as the page sends it, is recognized");
+        Check(!IsBadgeClick(BadgeMessage),
+            "a non-JSON message is not treated as the badge");
+        Check(!IsBadgeClick(JsonSerializer.Serialize(pageRequest)),
+            "a bridge request is not a badge click");
+        Check(!IsBadgeClick(JsonSerializer.Serialize(
+                "{\"dsh\":1,\"id\":1,\"method\":\"installPlugin\",\"params\":{\"spec\":\"dsh-plugin-desktop-updates\"}}")),
+            "a plugin install naming the package is not mistaken for the badge");
+        Check(!IsBadgeClick(null) && !IsBadgeClick("not json"), "a message that is not the badge is not one");
+        Check(Preview("a\nb") == "a b" && Preview(new string('x', 400)).Length <= 201,
+            "a log preview stays on one bounded line");
+
         var reply = DispatchAsync(parsed!, host, null, CancellationToken.None).GetAwaiter().GetResult();
-        Check(reply.Contains("\"ok\":true", StringComparison.Ordinal), "a handled request replies ok");
-        Check(reply.Contains("\"id\":7", StringComparison.Ordinal), "the reply carries the request id");
+        Check(reply.Contains("\"ok\":true", StringComparison.Ordinal), "a handled request replies ok");        Check(reply.Contains("\"id\":7", StringComparison.Ordinal), "the reply carries the request id");
         Check(host.Calls.Contains("check"), "the request reached the host");
 
         var unknown = Parse($"{{\"dsh\":{Version},\"id\":8,\"method\":\"nonsense\"}}");

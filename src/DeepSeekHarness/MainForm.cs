@@ -355,6 +355,7 @@ public sealed class MainForm : Form, IBridgeHost
             }
 
             ApplyHarnessStatus();
+            PushBridgeState();
         }
         finally
         {
@@ -477,6 +478,7 @@ public sealed class MainForm : Form, IBridgeHost
             _appUpdate = info;
             _appUpdateStatus = info.StatusLine;
             ApplyUpdateState();
+            PushBridgeState();
         }
         catch (Exception ex)
         {
@@ -754,6 +756,11 @@ public sealed class MainForm : Form, IBridgeHost
             SetStatus(string.Empty); // hide overlay
             UpdateBadge();
             await ReportPluginStateAsync();
+            // The page renders from state the app pushes, so it gets one as soon
+            // as it can receive one: without this, the Updates section shows
+            // placeholders until the user clicks something, and a section that
+            // looks empty reads as a section that does not work.
+            PushBridgeState();
             _ = StartBackgroundChecksAsync();
             await MeasurePageBackgroundAsync();
         }
@@ -820,6 +827,10 @@ public sealed class MainForm : Form, IBridgeHost
     /**
      * Page messages: the updates plugin (and the app's own badge) talk to the
      * app through the bridge, which is the only channel a page gets.
+     *
+     * A message that is neither a request nor the badge is logged rather than
+     * dropped: a page whose messages the app cannot read looks exactly like a
+     * page that sends none, and that is a difference only this log can show.
      */
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -833,10 +844,13 @@ public sealed class MainForm : Form, IBridgeHost
                 return;
             }
 
-            if (json?.Contains("dsh-desktop-updates", StringComparison.Ordinal) == true)
+            if (DesktopBridge.IsBadgeClick(json))
             {
                 ShowUpdates();
+                return;
             }
+
+            Log.Warn("ignoring an unrecognized page message: " + DesktopBridge.Preview(json));
         }
         catch (Exception ex)
         {
