@@ -23,8 +23,17 @@ window.__ModuleLoader__.load({
 		const { useCallback, useEffect, useState } = React
 
 		const name = 'dsh-plugin-desktop-updates'
-		/** Required service: the slot registry. */
-		const inject = ['slots']
+		/**
+		 * Identity shared by the sidebar panel row and the panel body: the shell
+		 * pairs them by this id, and selecting it is how the plugin opens its own
+		 * view in the window.
+		 */
+		const PANEL_ID = 'desktop-updates'
+		/**
+		 * Required services: the slot registry, and the layout controller whose
+		 * `selectPanel` opens the panel this plugin registers.
+		 */
+		const inject = ['slots', 'layout']
 
 		/** The native bridge, when this page runs inside the desktop app. */
 		function bridge() {
@@ -234,6 +243,7 @@ window.__ModuleLoader__.load({
 			const wide = Boolean(props && props.wide)
 			const state = useBridgeState()
 			const available = Boolean(state && state.app && state.app.available)
+			const open = (props && props.openUpdates) || function () {}
 
 			return h(
 				'button',
@@ -241,10 +251,7 @@ window.__ModuleLoader__.load({
 					type: 'button',
 					title: available ? 'An update is available' : 'Check for updates',
 					'aria-label': 'Check for updates',
-					onClick: () => {
-						const api = bridge()
-						if (api) api.openNative()
-					},
+					onClick: () => open(),
 					style: {
 						display: 'flex',
 						alignItems: 'center',
@@ -284,19 +291,25 @@ window.__ModuleLoader__.load({
 			)
 		}
 
-		/** The Updates section inside Settings. */
-		function UpdatesSection(props) {
+		/**
+		 * The updates body: the same facts and actions in both hosts, the
+		 * Settings section and the central panel. Neither host owns the data -
+		 * it arrives from the app through the bridge - so the two can never
+		 * disagree about what is installed or what is available.
+		 */
+		function UpdatesBody(props) {
 			const state = useBridgeState()
 			const action = useAction()
 			const [progress, setProgress] = useState(null)
+			const inPanel = Boolean(props && props.panel)
+			const close = (props && props.close) || null
+			const openUpdates = (props && props.openUpdates) || function () {}
 
 			useEffect(() => {
 				const api = bridge()
 				if (!api || !api.onProgress) return undefined
 				return api.onProgress(setProgress)
 			}, [])
-
-			const close = (props && props.close) || function () {}
 
 			if (!bridge()) {
 				return h(
@@ -321,7 +334,7 @@ window.__ModuleLoader__.load({
 
 			return h(
 				'div',
-				{ style: { padding: '2px', fontSize: '13px' } },
+				{ style: { padding: inPanel ? '0' : '2px', fontSize: '13px' } },
 				h('div', { style: { fontWeight: 600, fontSize: '14px', marginBottom: '2px' } }, 'Updates'),
 				h(
 					'div',
@@ -372,10 +385,19 @@ window.__ModuleLoader__.load({
 						onClick: () => action.run('apply', 'Restarting ...'),
 						children: 'Restart to apply',
 					}),
-					h(Button, {
-						onClick: () => action.run('openNative', ''),
-						children: 'Open the app window',
-					}),
+					inPanel
+						? null
+						: h(Button, {
+								onClick: () => {
+									// The panel renders behind the settings panel, so
+									// leaving settings first is what makes the switch
+									// visible. `close` is absent outside the shell's
+									// settings host, where the button then just opens.
+									if (close) close()
+									openUpdates()
+								},
+								children: 'Open the full view',
+							}),
 				),
 
 				h(
@@ -436,6 +458,57 @@ window.__ModuleLoader__.load({
 					: null,
 			)
 		}
+
+		/**
+		 * The Updates panel: the full view, in the app's own window, addressed
+		 * by the sidebar panel row with the same id. Selecting it is a layout
+		 * action the page performs itself, so opening updates never leaves the
+		 * window and never depends on the bridge.
+		 */
+		function UpdatesPanel(props) {
+			return h(
+				'div',
+				{
+					style: {
+						boxSizing: 'border-box',
+						height: '100%',
+						overflow: 'auto',
+						padding: '22px 26px 30px',
+					},
+				},
+				h('div', { style: { fontSize: '16px', fontWeight: 600, marginBottom: '2px' } }, 'Updates'),
+				h(
+					'div',
+					{ style: { opacity: 0.7, fontSize: '12.5px', marginBottom: '16px' } },
+					'DeepSeek Harness desktop app, the harness itself, and the plugins this home runs.',
+				),
+				h(UpdatesBody, { panel: true, openUpdates: props && props.openUpdates }),
+			)
+		}
+
+		/** The sidebar panel row's icon; the shell passes its size and state. */
+		function UpdatesPanelIcon(props) {
+			const size = (props && props.size) || 16
+			return h(
+				'svg',
+				{
+					width: size,
+					height: size,
+					viewBox: '0 0 16 16',
+					fill: 'none',
+					stroke: 'currentColor',
+					strokeWidth: 1.4,
+					strokeLinecap: 'round',
+					strokeLinejoin: 'round',
+					'aria-hidden': 'true',
+					style: { opacity: props && props.active ? 1 : 0.8 },
+				},
+				h('path', { d: 'M13.5 8a5.5 5.5 0 1 1-1.9-4.15' }),
+				h('path', { d: 'M13.5 2.5v3.2h-3.2' }),
+				h('path', { d: 'M8 5.2V8l2 1.3' }),
+			)
+		}
+
 
 		/** The plugin manager: what this home runs, and the switches for it. */
 		function PluginList() {
@@ -545,8 +618,30 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			// A marker for support and for the app: what this half registered, and
 			// whether it found the bridge. The app reads it after the page loads.
-			const marker = { plugin: name, bridge: Boolean(bridge()), registered: [], failed: [] }
+			const marker = { plugin: name, bridge: Boolean(bridge()), registered: [], failed: [], panel: false }
 			window.__dshDesktopUpdates = marker
+
+			/*
+			 * Opening updates is a layout action, not a bridge call: the panel
+			 * lives in this page's own window, so the page selects it itself and
+			 * the app is not involved at all. That also means opening it cannot
+			 * fail because the bridge is unavailable - the one case where it
+			 * falls back to the app's native window is a shell without the panel
+			 * slot, which is also a shell whose layout service would reject the
+			 * id it never registered.
+			 */
+			const openUpdates = () => {
+				try {
+					ctx.layout.selectPanel(PANEL_ID)
+					return true
+				} catch (error) {
+					report('opening the updates panel failed: ' + ((error && error.message) || error))
+					const api = bridge()
+					if (api) api.openNative()
+					return false
+				}
+			}
+			marker.openPanel = openUpdates
 
 			// Both slots are list slots: `id` is required, and registering a list
 			// entry without one throws rather than rendering nothing. Each
@@ -570,6 +665,7 @@ window.__ModuleLoader__.load({
 						try {
 							const dispose = ctx.slots.register(options, component)
 							marker.registered.push(slot)
+							if (slot === 'main') marker.panel = true
 							return dispose
 						} catch (error) {
 							// A callback that runs after apply() fails inside
@@ -596,8 +692,24 @@ window.__ModuleLoader__.load({
 					id: 'desktop-updates',
 					order: 20,
 					label: () => 'Check for updates',
+					inject: () => ({ openUpdates }),
 				},
 				UpdatesFooterAction,
+			)
+			contribute(
+				'sidebar.panellist',
+				{
+					name: 'sidebar.panellist',
+					id: PANEL_ID,
+					order: 30,
+					label: () => 'Updates',
+				},
+				UpdatesPanelIcon,
+			)
+			contribute(
+				'main',
+				{ name: 'main', key: PANEL_ID, inject: () => ({ openUpdates }) },
+				UpdatesPanel,
 			)
 			contribute(
 				'settings.section',
@@ -606,8 +718,9 @@ window.__ModuleLoader__.load({
 					id: 'desktop-updates',
 					order: 15,
 					label: () => 'Updates',
+					inject: () => ({ openUpdates }),
 				},
-				UpdatesSection,
+				UpdatesBody,
 			)
 
 			report('applied: ' + JSON.stringify(marker))

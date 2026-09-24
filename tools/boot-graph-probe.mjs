@@ -77,6 +77,11 @@ async function main() {
     ['the sidebar entry', "'sidebar.footer.action'"],
     ['the id a list slot requires', "name: 'sidebar.footer.action',\n\t\t\t\t\tid: 'desktop-updates'"],
     ['the settings section', "'settings.section'"],
+    // Updates opens as a panel in the app's own window: the sidebar row, the
+    // `main` body it addresses by that id, and the layout call that selects it.
+    ['the sidebar panel row', "name: 'sidebar.panellist'"],
+    ['the panel body', "name: 'main', key: PANEL_ID"],
+    ['the layout call that opens the panel', 'ctx.layout.selectPanel(PANEL_ID)'],
     ['the marker the app reads back', '__dshDesktopUpdates'],
     ['the report of a contribution the shell refused', 'marker.failed.push(slot'],
   ]

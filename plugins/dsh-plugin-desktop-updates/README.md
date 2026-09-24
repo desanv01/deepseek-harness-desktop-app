@@ -41,13 +41,21 @@ attestation to each release, which the package page shows.
 
 ## What it contributes
 
-| Slot | Entry id | What it renders |
+| Slot | Entry | What it renders |
 | --- | --- | --- |
-| `sidebar.footer.action` | `desktop-updates` | A labelled row beside Settings (an icon in the 56px rail) that opens the updates window; a dot appears when a newer app build exists |
-| `settings.section` | `desktop-updates` | The Updates section: app, harness, plugin list, and their actions |
+| `sidebar.footer.action` | id `desktop-updates` | A labelled row beside Settings (an icon in the 56px rail) that opens the Updates panel; a dot appears when a newer app build exists |
+| `sidebar.panellist` | id `desktop-updates` | The sidebar row for the Updates panel, addressed by the same id as the body below |
+| `main` | key `desktop-updates` | The Updates panel itself: the full view, in the app's own window |
+| `settings.section` | id `desktop-updates` | The concise view inside Settings, with the same facts and actions |
 
-Both slots are lists, so both registrations carry an `id`; the shell rejects a
-list entry without one.
+Opening updates is a **layout action, not a bridge call**: the plugin selects its
+own panel through `ctx.layout.selectPanel`, so the view appears in the window the
+user is already looking at, and opening it cannot fail because the app's bridge
+is unavailable. When the shell has no panel slot to select, the plugin falls back
+to the desktop app's native updates window — the same window the tray menu opens.
+
+The three list slots require an `id` and the keyed `main` slot requires a `key`;
+the shell rejects a registration that omits either.
 
 ## Saying what happened
 

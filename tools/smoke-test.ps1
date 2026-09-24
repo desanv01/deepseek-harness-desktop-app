@@ -529,6 +529,10 @@ try {
         Assert-Contains $clientText 'the sidebar entry carries the list slot id the registry requires' `
             'the sidebar entry carries the id a list slot requires'
         Assert-Contains $clientText 'the section shows the installed app version' 'the settings section renders live state'
+        Assert-Contains $clientText 'clicking it selects the updates panel in this window' `
+            'updates open as a panel in this window, not in a second one'
+        Assert-Contains $clientText 'without a layout service it falls back to the app window' `
+            'a shell without the panel slot falls back to the native window'
         Assert-Contains $clientText 'without the bridge the section says the app is not connected' `
             'it says so when the desktop app is not attached'
     }
@@ -594,6 +598,10 @@ try {
                 Assert-Contains $probeText 'the bundle route answers 200' 'the server serves the plugin bundle'
                 Assert-Contains $probeText 'the served bundle carries the id a list slot requires' `
                     'the served bundle carries the id the sidebar entry needs'
+                Assert-Contains $probeText 'the served bundle carries the sidebar panel row' `
+                    'the served bundle carries the panel row'
+                Assert-Contains $probeText 'the served bundle carries the layout call that opens the panel' `
+                    'the served bundle opens the panel in this window'
             }
         }
         finally {

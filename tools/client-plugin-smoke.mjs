@@ -176,6 +176,16 @@ const posted = []
 let stateListener = null
 let progressListener = null
 
+/**
+ * The messages asking the app to open its native updates window, whichever
+ * shape they came in: the stub bridge records a marker object, while a plugin
+ * that goes through the page bridge's own client would post a request.
+ */
+function openRequests() {
+  return posted.filter((message) =>
+    message?.type === 'open' || (message?.dsh === 1 && message?.method === 'open'))
+}
+
 const bridge = {
   version: 1,
   appVersion: 'test',
@@ -195,8 +205,7 @@ const bridge = {
 }
 
 let bridgeState = {
-  app: { version: '2026.09.16', latest: '2026.10.01', available: true, status: '2026.10.01 is available.', notes: '## Notes\n\n- one' },
-  harness: { installed: '0.1.5-rc.1', latest: '0.1.5-rc.1', alpha: '0.1.6-alpha.1', available: null, status: 'up to date' },
+  app: { version: '2026.09.16', latest: '2026.10.01', available: true, status: '2026.10.01 is available.', notes: '## Notes\n\n- one' },  harness: { installed: '0.1.5-rc.1', latest: '0.1.5-rc.1', alpha: '0.1.6-alpha.1', available: null, status: 'up to date' },
   staged: null,
   policy: { checkOnLaunch: true },
   plugins: {
@@ -210,13 +219,25 @@ let bridgeState = {
 
 const registrations = []
 
-/** The slots the shipped shell declares, with the kind that governs registration. */
+/**
+ * The slots the shipped shell declares, with the kind that governs registration.
+ * Both list slots need an `id` and the keyed panel slot needs a `key`, exactly
+ * as the real registry enforces.
+ */
 const declaredSlots = {
   'settings.section': 'list',
+  'sidebar.panellist': 'list',
+  main: 'keyed',
 }
 
 /** Declarations arriving late: inject waits, and the factory runs on declare. */
 const waiting = []
+
+/** Panel selections the plugin asked the layout service for. */
+const selectedPanels = []
+
+/** Whether the shell's layout service exists at all (a shell without it). */
+let layoutAvailable = true
 
 const context = {
   slots: {
@@ -227,6 +248,9 @@ const context = {
       }
       if (kind === 'list' && descriptor.id === undefined) {
         throw new Error(`list slot "${descriptor.name}" requires options.id`)
+      }
+      if (kind === 'keyed' && descriptor.key === undefined) {
+        throw new Error(`keyed slot "${descriptor.name}" requires options.key`)
       }
       registrations.push({ ...descriptor, component })
       return () => {}
@@ -243,6 +267,17 @@ const context = {
       return () => {}
     },
   },
+  layout: {
+    // The real service throws for an id no panel registered, and the plugin
+    // leans on that being an error rather than a silent no-op.
+    selectPanel: (id) => {
+      if (!layoutAvailable) throw new Error('layout.selectPanel is unavailable')
+      if (!registrations.some((entry) => entry.name === 'main' && entry.key === id)) {
+        throw new Error(`layout.selectPanel: main panel "${id}" is not registered`)
+      }
+      selectedPanels.push(id)
+    },
+  },
 }
 
 /** Declares a slot the way the shell does, running whatever waited for it. */
@@ -251,6 +286,15 @@ function declareSlot(name, kind) {
   for (const pending of waiting.splice(0)) {
     if (pending.name === name) pending.factory()
   }
+}
+
+/**
+ * The props a shell hands a registered component: the inject face the register
+ * call declared, plus the owner props for that slot.
+ */
+function propsFor(descriptor, ownerProps) {
+  const face = typeof descriptor?.inject === 'function' ? descriptor.inject() : {}
+  return { ...face, ...(ownerProps || {}) }
 }
 
 const moduleTable = { react: React }
@@ -290,6 +334,10 @@ const exportsObject = factory((specifier) => {
 
 check(exportsObject.name === 'dsh-plugin-desktop-updates', 'the plugin exports its name')
 check(Array.isArray(exportsObject.inject) && exportsObject.inject.includes('slots'), 'it injects the slot service')
+check(
+  Array.isArray(exportsObject.inject) && exportsObject.inject.includes('layout'),
+  'it injects the layout service that opens its panel',
+)
 check(typeof exportsObject.apply === 'function', 'it exports apply()')
 
 exportsObject.apply(context)
@@ -315,30 +363,69 @@ const footer = registrations.find((entry) => entry.name === 'sidebar.footer.acti
 check(Boolean(footer), 'apply() contributes the sidebar entry beside Settings')
 check(footer?.id === 'desktop-updates', 'the sidebar entry carries the list slot id the registry requires')
 
+// The panel: a sidebar row and the body it addresses by the same id. Together
+// they are what keeps updates inside the window instead of in a second one.
+const panelRow = registrations.find((entry) => entry.name === 'sidebar.panellist')
+check(Boolean(panelRow), 'apply() contributes a sidebar panel row')
+check(panelRow?.id === 'desktop-updates', 'the panel row carries the id the layout pairs with')
+check(typeof panelRow?.label === 'function' && panelRow.label() === 'Updates', 'the panel row is labelled Updates')
+
+const panel = registrations.find((entry) => entry.name === 'main')
+check(Boolean(panel), 'apply() registers the panel body in the layout main slot')
+check(panel?.key === 'desktop-updates', 'the panel body answers the same id as its row')
+
 const marker = window.__dshDesktopUpdates
 check(Boolean(marker), 'the bundle leaves a marker the app can read')
 check(
   Array.isArray(marker?.registered) && marker.registered.includes('sidebar.footer.action')
-  && marker.registered.includes('settings.section'),
-  'the marker names both slots as registered',
+  && marker.registered.includes('settings.section') && marker.registered.includes('sidebar.panellist')
+  && marker.registered.includes('main'),
+  'the marker names every registered slot',
 )
+check(marker?.panel === true, 'the marker reports the panel as registered')
+check(typeof marker?.openPanel === 'function', 'the marker exposes the panel opener for the app')
 check(Array.isArray(marker?.failed) && marker.failed.length === 0, 'the marker reports no failed contribution')
 check(marker?.plugin === 'dsh-plugin-desktop-updates', 'the marker names the plugin')
 
 // the sidebar entry, wide and rail. Each render is a fresh mount, so the state
 // set below is what the component sees.
 bridgeState = { ...bridgeState, app: { ...bridgeState.app, available: false, latest: '2026.09.16' } }
-const quietEntry = render(footer.component, { wide: true })
+const quietEntry = render(footer.component, propsFor(footer, { wide: true }))
 check(textOf(quietEntry).includes('Check for updates'), 'the wide sidebar entry is labelled')
 
 bridgeState = { ...bridgeState, app: { ...bridgeState.app, available: true, latest: '2026.10.01' } }
-const alertEntry = render(footer.component, { wide: true })
+const alertEntry = render(footer.component, propsFor(footer, { wide: true }))
 check(textOf(alertEntry).includes('Update available'), 'the entry announces an available update')
-const railEntry = render(footer.component, { wide: false })
+const railEntry = render(footer.component, propsFor(footer, { wide: false }))
 check(textOf(railEntry).includes('\u21bb'), 'the rail form shows the icon')
 
+// Clicking the sidebar entry opens updates by selecting the panel in this
+// window - no bridge call, no second window.
+selectedPanels.length = 0
+posted.length = 0
+const entryButton = findAction(alertEntry, 'Update available')
+check(Boolean(entryButton), 'the sidebar entry is clickable')
+if (entryButton) {
+  entryButton.props.onClick()
+  check(selectedPanels.includes('desktop-updates'), 'clicking it selects the updates panel in this window')
+  check(openRequests().length === 0, 'opening the panel asks the app for nothing')
+}
+
+// A shell that does not declare the panel slot cannot be asked for one: the
+// plugin falls back to the app's native window instead of doing nothing.
+layoutAvailable = false
+posted.length = 0
+try {
+  window.__dshDesktopUpdates.openPanel()
+} catch (error) {
+  check(false, 'the fallback opener does not throw: ' + error.message)
+}
+layoutAvailable = true
+check(openRequests().length === 1, 'without a layout service it falls back to the app window')
+posted.length = 0
+
 // the settings section, with the bridge
-const sectionTree = render(section.component, { close: () => {} })
+const sectionTree = render(section.component, propsFor(section, { close: () => {} }))
 const sectionText = textOf(sectionTree)
 check(sectionText.includes('2026.09.16'), 'the section shows the installed app version')
 check(sectionText.includes('2026.10.01'), 'the section shows the newest published version')
@@ -348,6 +435,29 @@ check(sectionText.includes('0.1.5-rc.1'), 'the section shows the harness version
 check(sectionText.includes('dsh-find-plugin'), 'the section lists this home\u2019s plugins')
 check(sectionText.includes('base profile'), 'the base bundles are marked as such')
 
+// The section's own way out of settings: close the modal, then select the
+// panel, so the switch is visible rather than hidden behind the modal.
+let closedSettings = false
+const fullView = findAction(render(section.component, propsFor(section, { close: () => { closedSettings = true } })), 'Open the full view')
+check(Boolean(fullView), 'the section offers the full view')
+if (fullView) {
+  selectedPanels.length = 0
+  fullView.props.onClick()
+  check(closedSettings, 'opening the full view leaves settings first')
+  check(selectedPanels.includes('desktop-updates'), 'and selects the updates panel')
+}
+
+// The panel itself: the same facts, rendered where the sidebar row points.
+const panelTree = render(panel.component, propsFor(panel, {}))
+const panelText = textOf(panelTree)
+check(panelText.includes('Updates'), 'the panel is titled Updates')
+check(panelText.includes('2026.09.16'), 'the panel shows the installed app version')
+check(panelText.includes('dsh-find-plugin'), 'the panel lists this home\u2019s plugins')
+check(
+  !panelText.includes('Open the full view'),
+  'the panel does not offer to open itself',
+)
+
 // A contribution the shell rejected renders nowhere, so the section has to say
 // so: this is the only surface a user ever sees for it.
 check(
@@ -355,7 +465,7 @@ check(
   'a clean boot shows no rejected-contribution warning',
 )
 window.__dshDesktopUpdates.failed.push('sidebar.footer.action: list slot requires options.id')
-const warnedText = textOf(render(section.component, { close: () => {} }))
+const warnedText = textOf(render(section.component, propsFor(section, { close: () => {} })))
 check(
   warnedText.includes('Part of this page did not load')
   && warnedText.includes('list slot requires options.id'),
@@ -365,16 +475,10 @@ window.__dshDesktopUpdates.failed.length = 0
 
 // the bridge contract is actually used
 check(stateListener !== null, 'the section subscribes to app state')
-const openButton = findAction(sectionTree, 'Open the app window')
-check(Boolean(openButton), 'the section can open the native window')
-if (openButton) {
-  openButton.props.onClick()
-  check(posted.some((message) => message.type === 'open' || message.openNative), 'clicking it calls the bridge')
-}
 
 // without the bridge the section must say so rather than pretend
 delete window.__dshDesktop
-const orphanTree = render(section.component, { close: () => {} })
+const orphanTree = render(section.component, propsFor(section, { close: () => {} }))
 const orphanText = textOf(orphanTree)
 check(
   orphanText.includes('not running inside the DeepSeek Harness desktop app'),
@@ -383,7 +487,7 @@ check(
 window.__dshDesktop = bridge
 
 // the plugin manager's own controls
-const listTree = render(section.component, { close: () => {} })
+const listTree = render(section.component, propsFor(section, { close: () => {} }))
 const disableButton = findAction(listTree, 'Enable')
 check(Boolean(disableButton), 'a disabled plugin offers Enable')
 const removeButton = findAction(listTree, 'Remove')
