@@ -82,7 +82,11 @@ public sealed class UpdatesForm : Form
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new Size(760, 560);
         MinimumSize = new Size(660, 480);
-        ShowInTaskbar = true;
+        // Owned by the main window and absent from the taskbar: this is the
+        // app's fallback surface for updates, not a second application, so it
+        // neither takes a taskbar slot nor gets its own Alt+Tab entry.
+        ShowInTaskbar = false;
+        ShowIcon = false;
         BackColor = Theme.Background;
         ForeColor = Theme.Foreground;
 

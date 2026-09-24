@@ -25,6 +25,15 @@ public sealed class MainForm : Form, IBridgeHost
         "(function(){try{return typeof window.__DSH_BOOT__ !== 'undefined';}catch(e){return false;}})()";
 
     /**
+     * Asks the updates plugin to select its own panel. The plugin answers false
+     * when the shell has no panel slot, which is the app's cue to fall back to
+     * its native window.
+     */
+    private const string PanelScript =
+        "(function(){try{var m=window.__dshDesktopUpdates;" +
+        "return !!(m&&typeof m.openPanel==='function'&&m.openPanel());}catch(e){return false;}})()";
+
+    /**
      * Injected into every page the window loads: a small pill in the corner of
      * the harness UI that only appears when a newer build exists, and that
      * hands the click back to the app through the WebView2 message channel.
@@ -212,7 +221,9 @@ public sealed class MainForm : Form, IBridgeHost
         if (_openUpdatesOnShown)
         {
             _openUpdatesOnShown = false;
-            BeginInvoke(new Action(ShowUpdates));
+            // --updates: prefer the page's own panel, fall back to the window
+            // when the page is not there to show one.
+            BeginInvoke(new Action(() => _ = OpenUpdatesAsync()));
         }
     }
 
@@ -534,11 +545,39 @@ public sealed class MainForm : Form, IBridgeHost
         return text;
     }
 
-    /** Tray action: open the updates window (app and harness tracks). */
-    private Task OnCheckUpdatesAsync()
+    /** Tray action: open the updates view (app and harness tracks). */
+    private Task OnCheckUpdatesAsync() => OpenUpdatesAsync();
+
+    /**
+     * Opens updates where the user is already looking.
+     *
+     * The page's own Updates panel is the primary surface: it lives in this
+     * window and the page opens it itself, so nothing appears beside the app.
+     * The native window stays as the fallback for what a page cannot cover - no
+     * page yet, a page whose plugin is missing, or a bridge that is not
+     * answering - which is exactly when a way to update matters most.
+     */
+    private async Task OpenUpdatesAsync()
     {
+        if (await TryOpenPagePanelAsync().ConfigureAwait(true)) return;
         ShowUpdates();
-        return Task.CompletedTask;
+    }
+
+    /** Asks the page to select its Updates panel; false when it cannot. */
+    private async Task<bool> TryOpenPagePanelAsync()
+    {
+        try
+        {
+            var core = _web?.CoreWebView2;
+            if (core == null) return false;
+            var answer = await core.ExecuteScriptAsync(PanelScript).ConfigureAwait(true);
+            return string.Equals(answer, "true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not open the updates panel in the page: " + ex.Message);
+            return false;
+        }
     }
 
     /** Opens the updates window, or brings the open one forward. */
