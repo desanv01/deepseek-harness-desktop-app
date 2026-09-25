@@ -149,16 +149,18 @@ public static class PluginManager
         var args = new List<string> { tools.DshCli!, "plugin", "--profile", HarnessProfile.Name };
         args.AddRange(pluginArgs);
 
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var environment = HarnessEnvironment.Hardened(home, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            // The CLI resolves the profile from DSH_HOME, so it must be told.
-            ["DSH_HOME"] = home,
             // pnpm is resolved through PATH, through its .cmd shim on Windows.
             ["PATH"] = runtime + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? ""),
-        };
+        });
 
         Log.Info($"running: dsh plugin --profile {HarnessProfile.Name} {string.Join(" ", pluginArgs)}");
-        var code = Proc.Run(tools.Node!, args.ToArray(), outFile, errFile, timeoutMs, ct, environment);
+        // Explicit, because the CLI anchors relative path specs on the directory
+        // it was invoked from: leaving this unset lets the child inherit an
+        // arbitrary cwd, and `add .` would then mean something unpredictable.
+        var code = Proc.Run(tools.Node!, args.ToArray(), outFile, errFile, timeoutMs, ct, environment,
+            workingDirectory: Environment.CurrentDirectory);
         var output = ReadTail(outFile) + ReadTail(errFile);
 
         if (code != 0)
@@ -168,12 +170,64 @@ public static class PluginManager
         return new Result(true, null, output);
     }
 
+    /**
+     * Rewrites a relative filesystem spec against `baseDir`, leaving everything
+     * else untouched.
+     *
+     * The CLI forwards `add` to pnpm, which runs with its cwd set to the profile
+     * directory, so a bare `.` or `../plugin` - or its `file:`/`link:` form -
+     * would otherwise resolve inside the profile. The CLI anchors those against
+     * the directory it was invoked from; the app has to supply the same
+     * anchoring because there is no shell behind it. Registry names, git specs
+     * and absolute paths pass through unchanged.
+     *
+     * A bare path stays bare and a prefixed spec keeps its prefix: pnpm's
+     * link-versus-copy semantics differ between `file:` and a plain directory,
+     * and anchoring must not change which one was asked for.
+     */
+    public static string AnchorSpec(string spec, string? baseDir)
+    {
+        var value = (spec ?? "").Trim();
+        if (value.Length == 0 || string.IsNullOrEmpty(baseDir)) return value;
+
+        var prefix = "";
+        if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) prefix = value[..5];
+        else if (value.StartsWith("link:", StringComparison.OrdinalIgnoreCase)) prefix = value[..5];
+
+        var path = prefix.Length > 0 ? value[prefix.Length..] : value;
+        if (path != "." && path != ".."
+            && !path.StartsWith("./", StringComparison.Ordinal)
+            && !path.StartsWith("../", StringComparison.Ordinal)
+            && !path.StartsWith(@".\", StringComparison.Ordinal)
+            && !path.StartsWith(@"..\", StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        try { return prefix + Path.GetFullPath(path, baseDir); }
+        catch (Exception ex)
+        {
+            // A spec the OS will not resolve is better handed to pnpm verbatim
+            // than replaced with a guess: pnpm's own error names the reason.
+            Log.Warn($"could not anchor the plugin spec '{value}': {ex.Message}");
+            return value;
+        }
+    }
+
     /** Installs a package (registry name, git spec, or a local path) into the home's profile. */
     public static Result Add(string home, Tools tools, string spec, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(spec)) return new Result(false, "no package was named", "");
 
-        var result = RunCli(home, tools, new[] { "add", spec.Trim() }, ct: ct);
+        // Anchored against the directory the app was started from, which is what
+        // a user means by `.` - the profile is never the right base.
+        var anchored = AnchorSpec(spec, Environment.CurrentDirectory);
+        if (!string.Equals(anchored, spec.Trim(), StringComparison.Ordinal))
+        {
+            Log.Info($"plugin spec '{spec.Trim()}' resolved to {anchored}");
+        }
+
+        var result = RunCli(home, tools, new[] { "add", anchored }, ct: ct);
         if (!result.Ok) return result;
 
         // pnpm can succeed while the CLI's reconciliation decides the package is
@@ -255,8 +309,7 @@ public static class PluginManager
     }
 
     /** The package name inside an install spec, when it is obvious. */
-    public static string? PackageNameOf(string spec)
-    {
+    public static string? PackageNameOf(string spec)    {
         var value = (spec ?? "").Trim();
         if (value.Length == 0) return null;
         if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)

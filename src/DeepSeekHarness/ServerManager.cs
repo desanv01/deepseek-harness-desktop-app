@@ -107,10 +107,10 @@ public static class ServerManager
             Log.Info("keep-alive is on: the harness will keep running after this window closes");
         }
         var args = new[] { dsh, "web", "--no-open", "--host", o.Address, "--port", o.Port.ToString() };
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["DSH_HOME"] = home,
-        };
+        // The harness runs from the project so that the project is what scopes
+        // the workspace and the session's recorded cwd; DSH_HOME is explicit so
+        // plugin resolution never depends on where that is.
+        var environment = HarnessEnvironment.Hardened(home);
         var spawnOptions = new SpawnOptions(
             WorkingDirectory: project,
             Environment: environment,

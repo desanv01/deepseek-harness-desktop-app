@@ -28,9 +28,11 @@ public static class Proc
         string? errFile,
         int timeoutMs,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? environment = null)
+        IReadOnlyDictionary<string, string>? environment = null,
+        string? workingDirectory = null)
     {
         var psi = StartInfo(exePath, args, outFile != null, errFile != null);
+        if (!string.IsNullOrEmpty(workingDirectory)) psi.WorkingDirectory = workingDirectory!;
         if (environment != null)
         {
             foreach (var entry in environment) psi.Environment[entry.Key] = entry.Value;
