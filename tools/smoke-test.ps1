@@ -229,6 +229,12 @@ try {
     # that needs no harness and no network, so it runs first and never skips: a
     # token that reaches a log is the artefact a user pastes into a bug report.
     Assert-Contains $probe.Out 'redaction   : ok' 'the token redaction rules hold'
+    # The relative-spec rule: the CLI anchors a relative plugin path on the
+    # directory it was invoked from, so the app has to hand it an absolute one.
+    Assert-Contains $probe.Out 'plugin spec : ok' 'relative plugin specs are anchored'
+    # The harness must not inherit code-resolution variables from whatever shell
+    # started the app; the check spawns a real node child to confirm it.
+    Assert-Contains $probe.Out 'env guard   : ok' 'the harness child drops code-resolution variables'
 
     # A CLI that answers --version is not automatically one that can boot: a
     # release whose dependencies float can install a tree that fails to resolve

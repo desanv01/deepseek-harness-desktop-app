@@ -56,8 +56,112 @@ public static class SelfTest
 
         Line("logs dir    : " + AppPaths.LogsDir);
         Line("redaction   : " + RedactionChecks());
+        Line("plugin spec : " + SpecAnchoringChecks());
+        Line("env guard   : " + EnvironmentGuardCheck(t));
         Line("== done ==");
         return 0;
+    }
+
+    /**
+     * The child's view of the code-resolution variables. They are stripped so an
+     * inherited one cannot change which plugin a name resolves to or what runs
+     * before the harness does; this asks a real child rather than trusting the
+     * dictionary we built.
+     */
+    internal static string EnvironmentGuardCheck(Tools t)
+    {
+        if (string.IsNullOrEmpty(t.Node)) return "skipped (no node)";
+        try
+        {
+            // Under the app's own data root rather than the log directory: this
+            // is a transient probe, not a diagnostic worth keeping.
+            AppPaths.Ensure();
+            var probe = Path.Combine(AppPaths.Root, "env-guard.json");
+            if (File.Exists(probe)) File.Delete(probe);
+            // Quoted so the arguments survive being joined into one node
+            // command line; the script reports what the child can actually see.
+            var script =
+                "require('fs').writeFileSync(process.argv[1], JSON.stringify({" +
+                "o: process.env.NODE_OPTIONS ?? null," +
+                "p: process.env.NODE_PATH ?? null," +
+                "h: process.env.DSH_HOME ?? null," +
+                "b: process.env.DSH_KEEP_ME ?? null }))";
+            var child = HarnessEnvironment.Hardened("guard-home",
+                new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["DSH_KEEP_ME"] = "sentinel",
+                });
+            var code = Proc.Run(t.Node!, new[] { "-e", script, probe }, null, null, 30_000,
+                default, child, workingDirectory: Path.GetDirectoryName(probe));
+            if (code != 0)
+            {
+                return $"FAILED (the child exited {code}; inherited NODE_OPTIONS="
+                       + (Environment.GetEnvironmentVariable("NODE_OPTIONS") ?? "unset") + ")";
+            }
+            if (!File.Exists(probe)) return "FAILED (the child wrote no report)";
+
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(probe));
+            var root = document.RootElement;
+            var problems = new System.Collections.Generic.List<string>();
+
+            // "Not inherited" means the child sees no usable value. It reads as
+            // an empty string or as absent depending on the platform, and an
+            // empty NODE_OPTIONS is harmless; a VALUE is what must never survive,
+            // because that is what can inject --require or add a resolve path.
+            void CheckStripped(string property, string name)
+            {
+                var element = root.GetProperty(property);
+                var value = element.ValueKind == System.Text.Json.JsonValueKind.String ? element.GetString() : null;
+                if (!string.IsNullOrEmpty(value)) problems.Add($"{name} leaked ({value})");
+            }
+
+            CheckStripped("o", "NODE_OPTIONS");
+            CheckStripped("p", "NODE_PATH");
+            if (root.GetProperty("h").GetString() != "guard-home") problems.Add("DSH_HOME missing");
+            if (root.GetProperty("b").GetString() != "sentinel") problems.Add("unrelated variable dropped");
+            return problems.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", problems) + ")";
+        }
+        catch (Exception ex)
+        {
+            return "FAILED (" + ex.Message + ")";
+        }
+    }
+
+    /**
+     * The relative-spec rule. The CLI anchors a relative plugin path on the
+     * directory it was invoked from, so the app has to hand it an absolute one -
+     * otherwise `.` would mean the profile directory inside pnpm.
+     */
+    internal static string SpecAnchoringChecks()
+    {
+        const string baseDir = @"C:\work\checkout";
+        var failures = new System.Collections.Generic.List<string>();
+
+        void Check(string name, string actual, string expected)
+        {
+            if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            {
+                failures.Add($"{name}: expected '{expected}', got '{actual}'");
+            }
+        }
+
+        Check("bare dot", PluginManager.AnchorSpec(".", baseDir), @"C:\work\checkout");
+        Check("parent", PluginManager.AnchorSpec("../sibling", baseDir), @"C:\work\sibling");
+        Check("bare path stays bare", PluginManager.AnchorSpec("./plugin", baseDir),
+            @"C:\work\checkout\plugin");
+        Check("file: keeps its prefix", PluginManager.AnchorSpec("file:./plugin", baseDir),
+            @"file:C:\work\checkout\plugin");
+        Check("link: keeps its prefix", PluginManager.AnchorSpec("link:../plugin", baseDir),
+            @"link:C:\work\plugin");
+        // Everything that is not a filesystem path must pass through untouched.
+        Check("registry name", PluginManager.AnchorSpec("dsh-plugin-x", baseDir), "dsh-plugin-x");
+        Check("scoped name", PluginManager.AnchorSpec("@scope/plugin", baseDir), "@scope/plugin");
+        Check("git spec", PluginManager.AnchorSpec("github:user/repo", baseDir), "github:user/repo");
+        Check("absolute path", PluginManager.AnchorSpec(@"C:\elsewhere\plugin", baseDir),
+            @"C:\elsewhere\plugin");
+        Check("versioned name", PluginManager.AnchorSpec("dsh-plugin-x@1.2.3", baseDir), "dsh-plugin-x@1.2.3");
+
+        return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
 
     /**
