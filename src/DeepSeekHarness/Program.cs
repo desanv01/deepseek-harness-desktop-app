@@ -41,6 +41,7 @@ internal static class Program
             Log.Info($"app data root: {AppPaths.Root}"
                      + (AppPaths.IsPortable ? $" (from {AppPaths.RootEnvVar})" : ""));
             if (opts.SelfTest) return SelfTest.Run(opts);
+            if (opts.ExitSafeMode) return SafeMode.RunCli(opts);
             if (opts.CheckHarness) return HarnessUpdate.RunCheck();
             if (opts.CheckUpdates) return UpdateCli.Run(opts);
             if (opts.InstallUpdate) return UpdateCli.RunInstall(opts);

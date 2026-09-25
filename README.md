@@ -58,7 +58,7 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **In-app updates** — the Updates UI lives inside the harness UI, where this harness expects extensions to live. A bundled DSH plugin contributes a sidebar entry beside Settings, a sidebar panel row, and a Settings section, and talks to the app through a versioned page bridge (`window.__dshDesktop`). Opening updates selects the plugin's own **panel in this window** — a layout action the page performs itself, so nothing appears beside the app and nothing depends on the bridge being up. The app keeps what a page must never hold: the download, the checksum verification, the staged swap, and the restart. The native updates window remains as the fallback surface: the tray menu, `--updates`, and any case where the page cannot show a panel (no page yet, plugin missing, bridge not answering).
 - **The plugin ships two ways** — the executable carries it and installs it into the home the app owns, with no package manager and no network; the same package is published to npm, so `dsh plugin add dsh-plugin-desktop-updates` installs it into any home like any other DSH plugin. A boot leaves an installed copy that is newer than the bundled one alone, so the npm path is not undone on the next launch; `--install-plugin` restores the bundled copy deliberately.
 - **Plugin management** — the same section installs, switches and removes harness plugins: ours and third-party ones, by npm name, git spec, or local folder. pnpm is carried by the build (extracted from the executable, or fetched with npm when the build shipped without it), so `dsh plugin add` works on a machine that has never installed pnpm. Enable/disable goes through the profile's patch layer, so a plugin can be taken out of the tree without uninstalling it.
-- **Safe mode** — a plugin the harness cannot load aborts the whole profile. The app reads the loader's own message, disables the offending plugin, and boots again once, so a bad plugin costs a notification instead of a window that never opens. `--safe-mode` boots with the base bundles only.
+- **Safe mode** — a plugin the harness cannot load aborts the whole profile. The app reads the loader's own message, disables the offending plugin, and boots again once, so a bad plugin costs a notification instead of a window that never opens. `--safe-mode` boots with the base bundles only: it sets aside the plugins this home added, keeps the base bundles **and this app's own plugin** (the updates panel and settings section live in it, and an escape hatch that removes the way out is not one), and records what it removed so `--exit-safe-mode` can put the same list back in the same order.
 - **Staged, never in place** — the running executable is never overwritten while it runs. The download is verified before the swap, the previous build is kept as `<exe>.old` until the new one has stayed up, and a checksum mismatch discards the download outright.
 - **Bounded logs** — `desktop.log` rotates at 4 MB and old server logs are pruned at startup.
 - **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.
@@ -204,6 +204,7 @@ DeepSeekHarness.exe --updates                    open the updates view on launch
 DeepSeekHarness.exe --keep-alive                 let the harness outlive the window (default)
 DeepSeekHarness.exe --no-keep-alive              closing the window stops the server
 DeepSeekHarness.exe --safe-mode                  boot with the base bundles only
+DeepSeekHarness.exe --exit-safe-mode             put back what safe mode set aside
 DeepSeekHarness.exe --install-plugin             install the bundled updates plugin into the home, then exit
 DeepSeekHarness.exe --plugin-list                list the plugins this home runs
 DeepSeekHarness.exe --add-plugin <spec>          install a plugin (npm name, git spec, or local folder)
@@ -226,6 +227,7 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--keep-alive` | on | The managed server outlives the window; the next launch attaches to it |
 | `--no-keep-alive` | off | Closing the window stops the server, as it did before keep-alive |
 | `--safe-mode` | off | Boot with the base bundles only, leaving added plugins aside |
+| `--exit-safe-mode` | off | Put back the bundles a safe-mode boot set aside, then exit |
 | `--install-plugin` | off | Install the bundled updates plugin into the selected home and exit |
 | `--plugin-list` | off | Print the bundles this home runs, with version and state |
 | `--add-plugin <spec>` | — | `dsh plugin add` through the app: registry name, git spec, or local folder |

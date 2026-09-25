@@ -226,16 +226,37 @@ public static class SafeMode
             var manifest = HarnessProfile.ManifestPath(home);
             if (!File.Exists(manifest)) return "there is no profile to trim";
 
+            var before = HarnessProfile.ReadBundles(home);
             var backup = manifest + ".safe-mode.bak";
             File.Copy(manifest, backup, overwrite: true);
 
-            foreach (var bundle in HarnessProfile.ReadBundles(home))
+            /*
+             * The app's own plugin is part of the desktop UI, not an added
+             * plugin: this build installs it on every launch, and the updates
+             * panel and settings section live in it. Trimming it would leave safe
+             * mode without the surfaces a user needs to recover with, which is
+             * the opposite of what an escape hatch is for.
+             */
+            var keep = new List<string>(HarnessProfile.BaseBundles)
             {
-                if (HarnessProfile.BaseBundles.Contains(bundle, StringComparer.OrdinalIgnoreCase)) continue;
+                DesktopPlugin.PackageName,
+            };
+
+            var removed = new List<string>();
+            foreach (var bundle in before)
+            {
+                if (keep.Contains(bundle, StringComparer.OrdinalIgnoreCase)) continue;
                 var error = HarnessProfile.RemoveBundle(home, bundle);
                 if (error != null) return error;
+                removed.Add(bundle);
                 Log.Warn($"safe mode: {bundle} removed from the bundle stack (manifest kept at {backup})");
             }
+
+            // The marker, not the backup, is what a later exit restores from: a
+            // whole-manifest copy goes stale as soon as anything else touches the
+            // profile, while the marker records the exact list this entry removed
+            // and the order it was in.
+            SafeModeState.Write(SafeModeState.FileFor(home), before, removed);
             return null;
         }
         catch (Exception ex)
@@ -243,6 +264,92 @@ public static class SafeMode
             return "safe mode could not trim the profile: " + ex.Message;
         }
     }
+
+    /**
+     * Leaves safe mode: puts back exactly the bundles the entry removed, in their
+     * original order. Idempotent - a bundle already present is left alone, so
+     * running this twice is not an error.
+     */
+    public static ExitResult Exit(string home)
+    {
+        var path = SafeModeState.FileFor(home);
+        var state = SafeModeState.Read(path);
+        if (state == null)
+        {
+            return new ExitResult(false, "this home is not in safe mode (no marker was found)");
+        }
+
+        try
+        {
+            var present = HarnessProfile.ReadBundles(home);
+            var restored = new List<string>();
+            foreach (var bundle in state.Before)
+            {
+                if (present.Contains(bundle, StringComparer.OrdinalIgnoreCase)) continue;
+                var error = HarnessProfile.AddBundle(home, bundle);
+                if (error != null) return new ExitResult(false, error);
+                restored.Add(bundle);
+                Log.Info($"left safe mode: {bundle} restored to the bundle stack");
+            }
+
+            SafeModeState.Delete(path, home);
+
+            var tail = restored.Count == 0
+                ? "the bundle stack already held every bundle it had before"
+                : "restored " + string.Join(", ", restored);
+            return new ExitResult(true, tail);
+        }
+        catch (Exception ex)
+        {
+            return new ExitResult(false, "safe mode could not be left: " + ex.Message);
+        }
+    }
+
+    /** True when this home is currently booting trimmed. */
+    public static bool IsActive(string home) => SafeModeState.Read(SafeModeState.FileFor(home)) != null;
+
+    /**
+     * --exit-safe-mode: put the profile back and exit. Writes to the profile, so
+     * it needs no server and no harness - which is the point, because a home in
+     * safe mode is one whose harness could not be trusted with the profile.
+     * Exit codes: 0 restored, 1 nothing to restore or the restore failed.
+     */
+    public static int RunCli(Options o)
+    {
+        var home = o.ResolveHome();
+        Console.WriteLine("== leaving DeepSeek Harness safe mode ==");
+        Console.WriteLine($"home   : {home}");
+        Console.WriteLine($"profile: {HarnessProfile.ManifestPath(home)}");
+
+        if (!HarnessProfile.Exists(home))
+        {
+            Console.WriteLine("state  : there is no profile for this home");
+            return 1;
+        }
+
+        var marker = SafeModeState.Read(SafeModeState.FileFor(home));
+        if (marker == null)
+        {
+            Console.WriteLine("state  : not in safe mode (no marker was found)");
+            Console.WriteLine("        : nothing was changed");
+            return 0;
+        }
+
+        Console.WriteLine($"entered: {marker.EnteredAtUtc:u}");
+        Console.WriteLine($"held   : {string.Join(", ", marker.Before)}");
+        Console.WriteLine($"set aside: {(marker.Removed.Count == 0 ? "(nothing)" : string.Join(", ", marker.Removed))}");
+
+        var result = Exit(home);
+        Console.WriteLine("result : " + result.Detail);
+        if (!result.Ok) return 1;
+
+        Console.WriteLine($"bundles: {string.Join(", ", HarnessProfile.ReadBundles(home))}");
+        Console.WriteLine("== safe mode left ==");
+        return 0;
+    }
+
+    /** What leaving safe mode did. */
+    public sealed record ExitResult(bool Ok, string Detail);
 
     /** Records a boot that worked, so a later failure can be compared with it. */
     public static void RememberGoodBoot(string home, Tools tools)
