@@ -225,6 +225,11 @@ try {
     $harnessEntry = if ($probe.Out -match 'dsh entry\s+:\s+([^\r\n]+)') { $Matches[1].Trim() } else { $null }
     Write-Host ("    harness CLI on this machine: {0}" -f $(if ($haveHarness) { 'yes' } else { 'no' }))
 
+    # The credential rule, exercised by the app itself. This is the one check
+    # that needs no harness and no network, so it runs first and never skips: a
+    # token that reaches a log is the artefact a user pastes into a bug report.
+    Assert-Contains $probe.Out 'redaction   : ok' 'the token redaction rules hold'
+
     # A CLI that answers --version is not automatically one that can boot: a
     # release whose dependencies float can install a tree that fails to resolve
     # its own plugin rows, which is a broken harness, not a broken app. The

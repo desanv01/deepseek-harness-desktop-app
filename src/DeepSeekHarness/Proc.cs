@@ -204,7 +204,7 @@ public static class Proc
         {
             await Task.WhenAll(
                 DrainStdoutAsync(p, so, onStdoutLine),
-                p.StandardError.BaseStream.CopyToAsync(se)).ConfigureAwait(false);
+                DrainStderrAsync(p, se)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -221,6 +221,9 @@ public static class Proc
     /**
      * Copies stdout to the log line by line so the readiness line is observable
      * the instant dsh prints it, without waiting for the file to flush.
+     *
+     * The hook receives the ORIGINAL line, because the readiness URL carries the
+     * token the caller must parse. Only the persisted copy is redacted.
      */
     private static async Task DrainStdoutAsync(Process p, FileStream so, Action<string>? onStdoutLine)
     {
@@ -229,11 +232,27 @@ public static class Proc
         string? line;
         while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
         {
-            await writer.WriteLineAsync(line).ConfigureAwait(false);
+            await writer.WriteLineAsync(Redact.Line(line)).ConfigureAwait(false);
             if (onStdoutLine != null)
             {
                 try { onStdoutLine(line); } catch (Exception ex) { Log.Warn("stdout hook failed: " + ex.Message); }
             }
+        }
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /**
+     * Copies stderr line by line rather than as a byte stream, so diagnostics
+     * that quote the authenticated URL are redacted before they reach the log.
+     */
+    private static async Task DrainStderrAsync(Process p, FileStream se)
+    {
+        using var reader = new StreamReader(p.StandardError.BaseStream);
+        using var writer = new StreamWriter(se);
+        string? line;
+        while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
+        {
+            await writer.WriteLineAsync(Redact.Line(line)).ConfigureAwait(false);
         }
         await writer.FlushAsync().ConfigureAwait(false);
     }

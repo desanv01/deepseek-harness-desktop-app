@@ -102,7 +102,7 @@ public static class ServerManager
         // Kill-on-close is the shutdown guarantee, so keep-alive mode turns it
         // off deliberately: the server must outlive this process.
         var job = JobObject.Create(killOnClose: !o.KeepServerRunning);
-        if (!o.KeepServerRunning)
+        if (o.KeepServerRunning)
         {
             Log.Info("keep-alive is on: the harness will keep running after this window closes");
         }
@@ -171,7 +171,7 @@ public static class ServerManager
         var url = ready.Task.Result;
         if (!TryParseEndpoint(url, out var port, out var token))
         {
-            Log.Error($"the server ready line did not contain a usable endpoint: {url}");
+            Log.Error($"the server ready line did not contain a usable endpoint: {Redact.Line(url)}");
             StopProcess(spawned, job);
             return null;
         }
