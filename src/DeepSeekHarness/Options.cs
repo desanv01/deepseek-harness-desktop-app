@@ -51,6 +51,9 @@ public sealed class Options
     /** --web-home: read the web home from here instead of the user profile. */
     public string? WebHome { get; private set; }
 
+    /** --check-plugins: report installed plugins against their published versions. */
+    public bool CheckPlugins { get; private set; }
+
     /** --bridge-selftest: exercise the page bridge protocol without a browser. */
     public bool BridgeSelfTest { get; private set; }
 
@@ -189,6 +192,10 @@ public sealed class Options
                 case "--check-updates":
                 case "-check-updates":
                     o.CheckUpdates = true;
+                    break;
+                case "--check-plugins":
+                case "-check-plugins":
+                    o.CheckPlugins = true;
                     break;
                 case "--updates":
                 case "-updates":

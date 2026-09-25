@@ -60,8 +60,39 @@ public static class SelfTest
         Line("env guard   : " + EnvironmentGuardCheck(t));
         Line("profile lock: " + ProfileLockChecks());
         Line("window state: " + WindowStateChecks());
+        Line("plugin versions: " + PluginVersionChecks());
         Line("== done ==");
         return 0;
+    }
+
+    /**
+     * The version comparison behind the plugin update check. Getting this wrong
+     * reports a downgrade as an update, or hides a real one.
+     */
+    internal static string PluginVersionChecks()
+    {
+        var failures = new System.Collections.Generic.List<string>();
+
+        void Check(string name, int actual, int expected)
+        {
+            if (Math.Sign(actual) != Math.Sign(expected)) failures.Add($"{name} (got {actual})");
+        }
+
+        Check("a higher patch is newer", PluginUpdateCheck.Compare("1.0.1", "1.0.0"), 1);
+        Check("a higher minor is newer", PluginUpdateCheck.Compare("1.1.0", "1.0.9"), 1);
+        Check("a higher major is newer", PluginUpdateCheck.Compare("2.0.0", "1.99.99"), 1);
+        Check("the same version is not newer", PluginUpdateCheck.Compare("1.2.3", "1.2.3"), 0);
+        Check("a lower version is not newer", PluginUpdateCheck.Compare("1.0.0", "1.0.1"), -1);
+        // Prerelease tails are dropped rather than ordered: which of these is
+        // "newer" depends on intent, and a downgrade must not read as an update.
+        Check("a prerelease tail is ignored", PluginUpdateCheck.Compare("1.2.0-rc.1", "1.2.0"), 0);
+        Check("a prerelease tail does not hide a real bump",
+            PluginUpdateCheck.Compare("1.3.0-rc.1", "1.2.0"), 1);
+        // Unparseable input reports "no opinion" rather than a direction.
+        Check("an unparseable version is not newer", PluginUpdateCheck.Compare("nightly", "1.0.0"), 0);
+        Check("a missing version is not newer", PluginUpdateCheck.Compare(null, "1.0.0"), 0);
+
+        return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
 
     /**
