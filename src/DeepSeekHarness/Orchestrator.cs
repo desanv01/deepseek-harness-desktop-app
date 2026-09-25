@@ -54,6 +54,7 @@ public static class Orchestrator
         var project = ResolveProject(o, settings, interactive: false);
         if (project == null) return 0;
         o.SetProject(project);
+        OfferWebImport(o, interactive: false);
 
         var r = Boot(o, status: null, CancellationToken.None);
         using (r)
@@ -149,8 +150,63 @@ public static class Orchestrator
      * The project to open: the explicit flag, then the remembered one, then an
      * interactive picker. Headless modes fall back to the current directory.
      */
-    private static string? ResolveProject(Options o, AppSettings settings, bool interactive)
+    /**
+     * Offers to bring a `dsh web` home into this app's home, once.
+     *
+     * Asked before the harness boots, because the import writes the profile the
+     * boot is about to read. Only offered when the web home has something in it,
+     * this home is still unused, and the question has not been answered before -
+     * so a launch never reopens a decision the user already made, and declining
+     * is recorded rather than asked again.
+     *
+     * Declining is the safe direction: the copy is a convenience, and a home in
+     * use must never be overwritten.
+     */
+    private static void OfferWebImport(Options o, bool interactive)
     {
+        if (o.ImportWebHome || o.SkipWebHome) return;
+        try
+        {
+            var home = o.ResolveHome();
+            var webHome = WebHomeImport.DefaultWebHome(o.WebHome);
+            if (!WebHomeImport.ShouldOffer(home, webHome)) return;
+
+            var preview = WebHomeImport.Inspect(webHome);
+            Log.Info($"a web harness home was found at {webHome}: {preview.Describe()}");
+
+            if (!interactive)
+            {
+                // No UI to ask with: leave the decision open rather than guessing.
+                Log.Info("not importing it without being asked; use --import-web-home to do it now");
+                return;
+            }
+
+            var question =
+                $"A DeepSeek Harness home from the web version was found:\n\n"
+                + $"    {webHome}\n\n"
+                + $"It holds {preview.Describe()}.\n\n"
+                + "Copy it into this app so your sessions, settings and presets are here?"
+                + "\n\nNothing is written to the original, and this is asked only once.";
+
+            if (!Ui.Confirm(question, "DeepSeek Harness")) return;   // asks again next launch
+
+            var error = WebHomeImport.Import(home, webHome, out var copied);
+            if (error != null)
+            {
+                Log.Warn("the web home import failed: " + error);
+                Ui.Error(o, "The web harness home could not be imported:\n\n" + error);
+                return;
+            }
+            Log.Info($"imported the web home: {copied.Count} item(s)");
+        }
+        catch (Exception ex)
+        {
+            // An import that fails must not stop the launch it precedes.
+            Log.Warn("could not offer the web home import: " + ex.Message);
+        }
+    }
+
+    private static string? ResolveProject(Options o, AppSettings settings, bool interactive)    {
         if (!string.IsNullOrWhiteSpace(o.ProjectDir) && Directory.Exists(o.ProjectDir)) return o.ProjectDir;
         if (!interactive)
         {

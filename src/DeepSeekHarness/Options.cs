@@ -42,6 +42,15 @@ public sealed class Options
     /** --install-log-bridge: install the bundled log bridge into the home, then exit. */
     public bool InstallLogBridge { get; private set; }
 
+    /** --import-web-home: bring a `dsh web` home into this app's home, then exit. */
+    public bool ImportWebHome { get; private set; }
+
+    /** --skip-web-home: record that the web home should be left alone, then exit. */
+    public bool SkipWebHome { get; private set; }
+
+    /** --web-home: read the web home from here instead of the user profile. */
+    public string? WebHome { get; private set; }
+
     /** --bridge-selftest: exercise the page bridge protocol without a browser. */
     public bool BridgeSelfTest { get; private set; }
 
@@ -204,6 +213,18 @@ public sealed class Options
                 case "--install-log-bridge":
                 case "-install-log-bridge":
                     o.InstallLogBridge = true;
+                    break;
+                case "--import-web-home":
+                case "-import-web-home":
+                    o.ImportWebHome = true;
+                    break;
+                case "--skip-web-home":
+                case "-skip-web-home":
+                    o.SkipWebHome = true;
+                    break;
+                case "--web-home":
+                case "-web-home":
+                    o.WebHome = ReadValue(args, ref i, "web-home");
                     break;
                 case "--bridge-selftest":
                 case "-bridge-selftest":

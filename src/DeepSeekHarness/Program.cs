@@ -49,6 +49,8 @@ internal static class Program
             if (opts.BridgeSelfTest) return DesktopBridge.RunSelfTest();
             if (opts.InstallPlugin) return DesktopPluginCli.Run(opts);
             if (opts.InstallLogBridge) return DesktopPluginCli.RunInstallLogBridge(opts);
+            if (opts.ImportWebHome) return WebHomeImport.RunCli(opts, skip: false);
+            if (opts.SkipWebHome) return WebHomeImport.RunCli(opts, skip: true);
             if (opts.AddPlugin != null) return PluginCli.RunAdd(opts, opts.AddPlugin);
             if (opts.RemovePlugin != null) return PluginCli.RunRemove(opts, opts.RemovePlugin);
             if (opts.PluginList) return PluginCli.RunList(opts);

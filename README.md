@@ -62,7 +62,7 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 - **Staged, never in place** — the running executable is never overwritten while it runs. The download is verified before the swap, the previous build is kept as `<exe>.old` until the new one has stayed up, and a checksum mismatch discards the download outright.
 - **Bounded logs** — `desktop.log` rotates at 4 MB, and every other log the app writes (the per-boot `server-*.out.log` / `.err.log` pair, update runs, profile init and the rest) is pruned at startup to the newest 60 files or 7 days, whichever comes first.
 - **The harness's own errors reach the log** — the harness keeps runtime warnings and errors in an in-memory ring that nothing exports, its default level filters warnings out of that ring entirely, and session activation failures never reach its logger at all. `--install-log-bridge` adds a bundled plugin that records those to stderr, where this app already writes them to `desktop.log`, so a boot that fails *after* startup can say why instead of only that it failed. Every line carries `[harness-log]`, which the app's loader-failure parser skips, so bridged chatter can never change which plugin a recovery pass blames. It is installed on request rather than on every launch, and its row can be switched off through the profile patch layer without uninstalling it.
-- **Dedicated data home** — the app uses its own `DSH_HOME` by default and never touches a harness home you did not point it at.
+- **Imports a web-version home** — `dsh web` keeps everything in `~/.dsh`, so someone who has been using the web UI would otherwise start here with an empty app. The first launch that finds such a home, with this one still unused, offers to copy it: settings, stored credentials, sessions, storages, agent presets, skills, attachments, the profile's own patch layer, and each community plugin's **declaration** — never the package tree, which is the package manager's output and tied to the tree that produced it. The original is only ever read, the copy is staged and promoted by a single rename so an interrupted import cannot leave a half-populated home, and the answer is recorded so the question is asked once. `--import-web-home` and `--skip-web-home` do either answer without being asked.
 - **Opt-in updates** — `--update` runs `npm install -g @deepseek-ai/dsh@latest` behind a lock and validates the CLI before booting. Without the flag, a launch never mutates a working install.
 - **Theme-aware window** — the title bar and border follow the rendered page background, and the window icon follows the Windows theme.
 
@@ -208,6 +208,8 @@ DeepSeekHarness.exe --safe-mode                  boot with the base bundles only
 DeepSeekHarness.exe --exit-safe-mode             put back what safe mode set aside
 DeepSeekHarness.exe --install-plugin             install the bundled updates plugin into the home, then exit
 DeepSeekHarness.exe --install-log-bridge         install the bundled log bridge into the home, then exit
+DeepSeekHarness.exe --import-web-home            copy a `dsh web` home into this app's home, then exit
+DeepSeekHarness.exe --skip-web-home              record that the web home should be left alone
 DeepSeekHarness.exe --plugin-list                list the plugins this home runs
 DeepSeekHarness.exe --add-plugin <spec>          install a plugin (npm name, git spec, or local folder)
 DeepSeekHarness.exe --remove-plugin <name>       remove one
@@ -232,6 +234,9 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 | `--exit-safe-mode` | off | Put back the bundles a safe-mode boot set aside, then exit |
 | `--install-plugin` | off | Install the bundled updates plugin into the selected home and exit |
 | `--install-log-bridge` | off | Install the bundled log bridge into the selected home and exit |
+| `--import-web-home` | off | Copy a `dsh web` home into this app's home, then exit |
+| `--skip-web-home` | off | Record that the web home should be left alone, then exit |
+| `--web-home <dir>` | `~/.dsh` | The web home to read; for a home kept somewhere else |
 | `--plugin-list` | off | Print the bundles this home runs, with version and state |
 | `--add-plugin <spec>` | — | `dsh plugin add` through the app: registry name, git spec, or local folder |
 | `--remove-plugin <name>` | — | Remove a plugin from the profile |
