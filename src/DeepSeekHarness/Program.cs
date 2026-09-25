@@ -48,6 +48,7 @@ internal static class Program
             if (opts.RepairHarness) return HarnessCli.RunRepair();
             if (opts.BridgeSelfTest) return DesktopBridge.RunSelfTest();
             if (opts.InstallPlugin) return DesktopPluginCli.Run(opts);
+            if (opts.InstallLogBridge) return DesktopPluginCli.RunInstallLogBridge(opts);
             if (opts.AddPlugin != null) return PluginCli.RunAdd(opts, opts.AddPlugin);
             if (opts.RemovePlugin != null) return PluginCli.RunRemove(opts, opts.RemovePlugin);
             if (opts.PluginList) return PluginCli.RunList(opts);

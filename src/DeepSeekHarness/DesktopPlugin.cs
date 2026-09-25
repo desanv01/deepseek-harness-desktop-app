@@ -24,6 +24,15 @@ public static class DesktopPlugin
     /** Files the plugin package consists of; each is an embedded resource. */
     private static readonly string[] Files = { "package.json", "cordis.patch.yml", "index.js", "client.js" };
 
+    /**
+     * The log bridge: a second bundled plugin, with its own resource prefix
+     * because the two packages share file names. It is installed on request
+     * rather than on every boot - it attaches to the harness's logger, so it
+     * belongs to the boot path only once someone has chosen it.
+     */
+    public const string LogBridgePackageName = "dsh-plugin-log-bridge";
+    private static readonly string[] LogBridgeFiles = { "package.json", "cordis.patch.yml", "index.js" };
+
     /** What happened the last time Ensure ran, for logs and for --install-plugin. */
     public sealed record Result(
         bool Installed, bool Updated, bool AlreadyCurrent, string? Version, string? Error, string? KeptNewer = null)
@@ -159,13 +168,17 @@ public static class DesktopPlugin
 
     /** Writes the embedded plugin files into the app's data directory. */
     private static string? Extract(string target)
+        => Extract(target, Files, "plugin");
+
+    /** Writes one bundled plugin's embedded files into the app's data directory. */
+    private static string? Extract(string target, IReadOnlyList<string> files, string resourcePrefix)
     {
         try
         {
             Directory.CreateDirectory(target);
-            foreach (var file in Files)
+            foreach (var file in files)
             {
-                var text = ReadResource(file);
+                var text = ReadResource(resourcePrefix, file);
                 if (text == null) return $"the bundled plugin is missing {file}";
                 File.WriteAllText(Path.Combine(target, file), text);
             }
@@ -177,16 +190,18 @@ public static class DesktopPlugin
         }
     }
 
-    private static string? ReadResource(string fileName)
+    private static string? ReadResource(string fileName) => ReadResource("plugin", fileName);
+
+    private static string? ReadResource(string resourcePrefix, string fileName)
     {
         var assembly = Assembly.GetExecutingAssembly();
-        var name = "DShNative.plugin." + fileName;
+        var name = "DShNative." + resourcePrefix + "." + fileName;
         using var stream = assembly.GetManifestResourceStream(name);
         if (stream == null)
         {
             // A missing resource is a build mistake, not a runtime condition.
             Log.Warn($"embedded resource {name} is missing; available: "
-                     + string.Join(", ", assembly.GetManifestResourceNames().Where(n => n.Contains("plugin"))));
+                     + string.Join(", ", assembly.GetManifestResourceNames().Where(n => n.Contains(resourcePrefix))));
             return null;
         }
         using var reader = new StreamReader(stream);
@@ -195,4 +210,62 @@ public static class DesktopPlugin
 
     /** The plugin files as they are embedded, for diagnostics. */
     public static IReadOnlyList<string> BundledFiles => Files;
+
+    /**
+     * Installs the log bridge into a home, and adds it to the bundle stack.
+     * Returns null on success. Idempotent: installing twice is a no-op.
+     *
+     * Separate from {@link Ensure} on purpose. The bridge attaches to the
+     * harness's logger, so it belongs to the boot path only once it has been
+     * asked for; a defect in it should not be able to affect a launch that never
+     * wanted it.
+     */
+    public static string? InstallLogBridge(string home, out string? version)
+    {
+        version = null;
+        try
+        {
+            var v = BundledVersion(LogBridgeFiles, "logbridge");
+            version = v;
+            if (v == null) return "the bundled log bridge is missing its package.json";
+
+            var stage = Path.Combine(AppPaths.PluginsDir, LogBridgePackageName + "-" + v);
+            var extractError = Extract(stage, LogBridgeFiles, "logbridge");
+            if (extractError != null) return extractError;
+
+            var installed = HarnessProfile.ReadPackageVersion(
+                Path.Combine(HarnessProfile.ModulesDir(home), LogBridgePackageName));
+            if (!string.Equals(installed, v, StringComparison.OrdinalIgnoreCase))
+            {
+                var error = HarnessProfile.InstallPlugin(home, stage, LogBridgePackageName, v);
+                if (error != null) return error;
+                Log.Info($"installed the log bridge {v}");
+            }
+
+            var bundleError = HarnessProfile.AddBundle(home, LogBridgePackageName);
+            if (bundleError != null) return bundleError;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return "the log bridge could not be installed: " + ex.Message;
+        }
+    }
+
+    /** The version of one bundled plugin, read from its embedded manifest. */
+    private static string? BundledVersion(IReadOnlyList<string> files, string resourcePrefix)
+    {
+        try
+        {
+            var text = ReadResource(resourcePrefix, files[0]);
+            if (text == null) return null;
+            using var document = System.Text.Json.JsonDocument.Parse(text);
+            return document.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not read the bundled plugin version: " + ex.Message);
+            return null;
+        }
+    }
 }

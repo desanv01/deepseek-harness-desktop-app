@@ -823,6 +823,84 @@ try {
     $r15b = Invoke-App @('--no-window', '--project', $f15, '--dsh-home', $f15Home) 's15b'
     $f15Bundles2 = ((Get-Content -LiteralPath $f15ManifestPath -Raw | ConvertFrom-Json).dsh.profile.bundles -join ',')
     Assert-True ($f15Bundles2 -notlike '*half-written-plugin*') 'a package with no manifest counts as missing'
+
+    # --------------------------------------------------------------- scenario 16
+    Write-Step '16. the log bridge installs on request, and its line format is right'
+    # The bridge joins the boot path, so it is installed when asked for rather
+    # than on every launch - a defect in it must not affect a launch that never
+    # wanted it. Every line it writes carries [harness-log], which the loader
+    # failure parser skips, so it cannot change which plugin gets blamed.
+    $f16 = Join-Path $WorkRoot 's16'
+    $f16Home = Join-Path $f16 'home'
+    $f16Profile = Join-Path $f16Home 'profiles\web'
+    New-Item -ItemType Directory -Force -Path $f16Profile | Out-Null
+    New-Prefix -Path $f16 -Version '1.2.3' | Out-Null
+    Set-ScenarioPath $f16
+    # The profile is seeded here because the fixture CLI cannot initialize one;
+    # the install is what this scenario is testing, not profile creation.
+    Set-Content -LiteralPath (Join-Path $f16Profile 'package.json') -Encoding UTF8 -Value @'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {},
+  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"], "patchReload": "live" } }
+}
+'@
+
+    $r16 = Invoke-App @('--install-log-bridge', '--dsh-home', $f16Home) 's16'
+    Assert-True ($r16.Code -eq 0) ("installing the log bridge exits 0 (got {0})" -f $r16.Code)
+    $f16Pkg = Join-Path $f16Home 'profiles\web\node_modules\dsh-plugin-log-bridge'
+    Assert-True (Test-Path -LiteralPath (Join-Path $f16Pkg 'index.js')) 'the bridge package is written into the profile'
+    Assert-True (Test-Path -LiteralPath (Join-Path $f16Pkg 'cordis.patch.yml')) 'its bundle patch comes with it'
+    $f16Bundles = ((Get-Content -LiteralPath (Join-Path $f16Home 'profiles\web\package.json') -Raw |
+                    ConvertFrom-Json).dsh.profile.bundles -join ',')
+    Assert-Contains $f16Bundles 'dsh-plugin-log-bridge' 'the bridge joins the bundle stack'
+    Assert-Contains $r16.Out 'harness-log' 'the install report explains the prefix'
+
+    # A second install must be a clean no-op, not a duplicated row.
+    $r16b = Invoke-App @('--install-log-bridge', '--dsh-home', $f16Home) 's16b'
+    Assert-True ($r16b.Code -eq 0) 'installing the bridge twice still exits 0'
+    $f16Repeated = @((Get-Content -LiteralPath (Join-Path $f16Home 'profiles\web\package.json') -Raw |
+                       ConvertFrom-Json).dsh.profile.bundles | Where-Object { $_ -eq 'dsh-plugin-log-bridge' })
+    Assert-True ($f16Repeated.Count -eq 1) 'the bridge appears in the bundle stack exactly once'
+
+    # Load the module the profile actually ships and check what it produces.
+    # Cordis is imported at module scope only for Logger.format, which apply()
+    # alone needs, so the pure exports are exercised without it.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $f16Url = 'file:///' + ($f16Pkg -replace '\\', '/')
+        $f16Probe = Join-Path $WorkRoot 's16-probe.mjs'
+        $f16Script = @"
+import { bridgeLines, createLimitedWriter, LINE_PREFIX } from '$f16Url/index.js'
+const bad = []
+if (LINE_PREFIX !== '[harness-log]') bad.push('prefix is ' + LINE_PREFIX)
+const one = bridgeLines('error', 'web-server', 'boom')
+if (one.length !== 1 || one[0] !== '[harness-log] error web-server: boom') bad.push('single: ' + JSON.stringify(one))
+const many = bridgeLines('session-error', 's1', 'first\n\n  second')
+if (many.length !== 2) bad.push('blank continuation dropped: ' + JSON.stringify(many))
+else if (!/^\[harness-log\] {2,}second$/.test(many[1])) bad.push('indent: ' + JSON.stringify(many[1]))
+let now = 0
+const written = []
+const emit = createLimitedWriter((t) => written.push(t), () => now)
+for (let i = 0; i < 130; i++) emit(['line'])
+// 130 attempts, a budget of 100: the 101st onwards are dropped, not written.
+const accepted = written.filter((t) => t === 'line\n').length
+if (accepted !== 100) bad.push('window limit accepted ' + accepted)
+now = 61000
+emit(['line'])
+const report = written.find((t) => t.includes('over the rate limit'))
+if (!report) bad.push('no drop report was written')
+else if (!report.includes('dropped 30 message(s)')) bad.push('drop count: ' + JSON.stringify(report))
+console.log(bad.length === 0 ? 'ok' : 'FAILED: ' + bad.join(' | '))
+"@
+        Set-Content -LiteralPath $f16Probe -Value $f16Script -Encoding UTF8
+        $f16ProbeOut = (& node $f16Probe 2>&1 | Out-String).Trim()
+        Assert-Contains $f16ProbeOut 'ok' 'the bridge line format and rate limit behave as documented'
+        if ($f16ProbeOut -notmatch '^ok') { Write-Host ("    probe said: " + $f16ProbeOut) -ForegroundColor Yellow }
+    }
+    else {
+        Write-Host '    SKIP  node is not on PATH'
+    }
 }
 finally {
     Reset-Environment

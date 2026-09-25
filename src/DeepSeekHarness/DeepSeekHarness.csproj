@@ -41,6 +41,14 @@
     <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\package.json" LogicalName="DShNative.plugin.package.json" />
     <EmbeddedResource Include="..\..\plugins\dsh-plugin-desktop-updates\cordis.patch.yml" LogicalName="DShNative.plugin.cordis.patch.yml" />
     <!--
+      The log bridge: records the harness's own runtime warnings and errors into
+      the app's log. Sources live in plugins\dsh-plugin-log-bridge. Its own
+      resource prefix, because the two plugins share file names.
+    -->
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-log-bridge\index.js" LogicalName="DShNative.logbridge.index.js" />
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-log-bridge\package.json" LogicalName="DShNative.logbridge.package.json" />
+    <EmbeddedResource Include="..\..\plugins\dsh-plugin-log-bridge\cordis.patch.yml" LogicalName="DShNative.logbridge.cordis.patch.yml" />
+    <!--
       The pnpm runtime used to install third-party plugins. It is fetched by
       build.ps1 into assets\pnpm (git-ignored, ~12 MB) and embedded when present;
       a build without it still works, because the app fetches the runtime with
