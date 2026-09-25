@@ -44,6 +44,7 @@ internal static class Program
             if (opts.ExitSafeMode) return SafeMode.RunCli(opts);
             if (opts.CheckHarness) return HarnessUpdate.RunCheck();
             if (opts.CheckUpdates) return UpdateCli.Run(opts);
+            if (opts.CheckPlugins) return PluginUpdateCheck.RunCli(opts);
             if (opts.InstallUpdate) return UpdateCli.RunInstall(opts);
             if (opts.RepairHarness) return HarnessCli.RunRepair();
             if (opts.BridgeSelfTest) return DesktopBridge.RunSelfTest();

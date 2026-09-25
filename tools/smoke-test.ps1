@@ -241,6 +241,8 @@ try {
     # A remembered window size must degrade to "no stored bounds" rather than to
     # a window too small to use.
     Assert-Contains $probe.Out 'window state: ok' 'a stored window geometry is honoured only when usable'
+    # A plugin with no published version must not be reported as up to date.
+    Assert-Contains $probe.Out 'plugin versions: ok' 'the plugin version comparison does not invent a direction'
 
     # A CLI that answers --version is not automatically one that can boot: a
     # release whose dependencies float can install a tree that fails to resolve
@@ -984,6 +986,47 @@ console.log(bad.length === 0 ? 'ok' : 'FAILED: ' + bad.join(' | '))
     finally {
         if ($savedProfile) { $env:USERPROFILE = $savedProfile }
     }
+
+    # --------------------------------------------------------------- scenario 18
+    Write-Step '18. the plugin update check is honest about what it cannot know'
+    # A plugin installed from a local path or a git spec has no published version
+    # to compare against. Asking the registry about it would either fail or match
+    # an unrelated package that shares the name, so the recorded spec decides -
+    # and "cannot tell" is reported as such rather than as up to date.
+    $f18 = Join-Path $WorkRoot 's18'
+    $f18Home = Join-Path $f18 'home'
+    $f18Profile = Join-Path $f18Home 'profiles\web'
+    $f18Modules = Join-Path $f18Profile 'node_modules'
+    New-Item -ItemType Directory -Force -Path $f18Modules | Out-Null
+    New-Prefix -Path $f18 -Version '1.2.3' | Out-Null
+    Set-ScenarioPath $f18
+
+    foreach ($bundleName in @('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'local-plugin')) {
+        $bundleDir = Join-Path $f18Modules $bundleName
+        New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
+        Set-Content -LiteralPath (Join-Path $bundleDir 'package.json') -Encoding ASCII `
+            -Value ('{ "name": "' + $bundleName + '", "version": "1.0.0" }')
+    }
+    Set-Content -LiteralPath (Join-Path $f18Profile 'package.json') -Encoding UTF8 -Value @'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": { "local-plugin": "file:../somewhere" },
+  "dsh": { "profile": { "bundles": [
+    "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "local-plugin"
+  ], "patchReload": "live" } }
+}
+'@
+
+    $r18 = Invoke-App @('--check-plugins', '--dsh-home', $f18Home) 's18'
+    Assert-Contains $r18.Out 'local-plugin' 'the check reports the installed plugin'
+    Assert-Contains $r18.Out 'local path or git' 'a non-registry plugin is named as such, not guessed at'
+    Assert-True ($r18.Code -eq 1) ("nothing checkable exits 1 rather than claiming everything is current (got {0})" -f $r18.Code)
+
+    # A home with no profile at all is reported, not crashed on.
+    $r18b = Invoke-App @('--check-plugins', '--dsh-home', (Join-Path $f18 'empty')) 's18b'
+    Assert-True ($r18b.Code -eq 1) 'a home with no profile exits 1'
+    Assert-Contains $r18b.Out 'no profile' 'it says there is no profile'
 }
 finally {
     Reset-Environment
