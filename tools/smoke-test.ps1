@@ -719,6 +719,57 @@ try {
         Write-Host '    SKIP  no listener port was reported' -ForegroundColor Yellow
     }
     if ($squatter) { Stop-Job $squatter -ErrorAction SilentlyContinue; Remove-Job $squatter -Force -ErrorAction SilentlyContinue }
+
+    # --------------------------------------------------------------- scenario 14
+    Write-Step '14. safe mode keeps the app plugin and can be left again'
+    # Two properties an escape hatch has to have: it must not remove the surfaces
+    # the user needs to recover with, and it must be reversible. Entering used to
+    # trim every non-base bundle - including this app's own plugin - and nothing
+    # could put them back, because only a whole-manifest backup was kept.
+    $f14 = Join-Path $WorkRoot 's14'
+    $f14Home = Join-Path $f14 'home'
+    $f14Profile = Join-Path $f14Home 'profiles\web'
+    New-Item -ItemType Directory -Force -Path $f14Profile | Out-Null
+    New-Prefix -Path $f14 -Version '1.2.3' | Out-Null
+    Set-ScenarioPath $f14
+
+    $f14Manifest = @'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {},
+  "dsh": { "profile": { "bundles": [
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "dsh-plugin-desktop-updates",
+    "some-community-plugin"
+  ], "patchReload": "live" } }
+}
+'@
+    $f14ManifestPath = Join-Path $f14Profile 'package.json'
+    Set-Content -LiteralPath $f14ManifestPath -Value $f14Manifest -Encoding UTF8
+
+    function Get-S14Bundles {
+        $m = Get-Content -LiteralPath $f14ManifestPath -Raw | ConvertFrom-Json
+        return ($m.dsh.profile.bundles -join ',')
+    }
+    $f14Start = Get-S14Bundles
+
+    # The boot itself fails against a fixture CLI; the trim happens before it.
+    $r14a = Invoke-App @('--safe-mode', '--no-window', '--project', $f14, '--dsh-home', $f14Home) 's14-enter'
+    $f14After = Get-S14Bundles
+    Assert-Contains $f14After 'dsh-plugin-desktop-updates' 'safe mode keeps this app''s own plugin'
+    Assert-True ($f14After -notlike '*some-community-plugin*') 'safe mode sets the added plugin aside'
+    Assert-True (Test-Path -LiteralPath (Join-Path $f14Profile '.safe-mode.json')) 'entering safe mode records what it removed'
+
+    $r14b = Invoke-App @('--exit-safe-mode', '--dsh-home', $f14Home) 's14-exit'
+    Assert-True ($r14b.Code -eq 0) ("leaving safe mode exits 0 (got {0})" -f $r14b.Code)
+    Assert-True ((Get-S14Bundles) -eq $f14Start) 'leaving safe mode restores the exact bundle list and order'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $f14Profile '.safe-mode.json'))) 'the marker is cleared once the profile is whole again'
+
+    $r14c = Invoke-App @('--exit-safe-mode', '--dsh-home', $f14Home) 's14-exit-again'
+    Assert-True ($r14c.Code -eq 0) 'leaving safe mode twice is a clean no-op'
+    Assert-True ((Get-S14Bundles) -eq $f14Start) 'the second leave changes nothing'
 }
 finally {
     Reset-Environment

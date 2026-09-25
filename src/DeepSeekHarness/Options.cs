@@ -45,6 +45,9 @@ public sealed class Options
     /** --safe-mode: boot with the base bundles only, leaving added plugins aside. */
     public bool SafeMode { get; private set; }
 
+    /** --exit-safe-mode: put back the bundles a safe-mode boot set aside. */
+    public bool ExitSafeMode { get; private set; }
+
     /** --add-plugin <spec>: install a harness plugin into the home, then exit. */
     public string? AddPlugin { get; private set; }
 
@@ -202,6 +205,10 @@ public sealed class Options
                 case "--safe-mode":
                 case "-safe-mode":
                     o.SafeMode = true;
+                    break;
+                case "--exit-safe-mode":
+                case "-exit-safe-mode":
+                    o.ExitSafeMode = true;
                     break;
                 case "--add-plugin":
                 case "-add-plugin":
