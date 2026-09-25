@@ -254,6 +254,24 @@ public static class Orchestrator
             var toolFailure = PrepareTools(o, ref tools, status, ct, guard);
             if (toolFailure != null) return toolFailure;
 
+            // A pinned port that something else already holds is worth naming
+            // before a spawn: `dsh web` would fail with EADDRINUSE and the app
+            // would report a generic boot failure, hiding the one cause the user
+            // can act on. Only meaningful when the port was pinned - the default
+            // is 0, where the OS picks a free one and this cannot happen.
+            if (o.Port != 0 && NetProbe.IsOpen(o.Address, o.Port))
+            {
+                var portProbe = NetProbe.Probe($"http://{o.Address}:{o.Port}/");
+                if (portProbe.Status == EndpointStatus.Occupied)
+                {
+                    return Fail(30,
+                        $"Port {o.Port} on {o.Address} is already in use by another service.\n\n"
+                        + $"{portProbe.Detail ?? "The listener did not identify itself as DeepSeek Harness."}\n\n"
+                        + "Choose another port, or drop --port to let the OS pick a free one.",
+                        guard);
+                }
+            }
+
             // The app's own UI lives in a harness plugin, so it must be in the
             // profile before the server composes it. This needs no package
             // manager: the plugin ships inside the executable.
