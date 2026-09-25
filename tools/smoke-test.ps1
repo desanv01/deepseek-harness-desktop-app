@@ -238,6 +238,9 @@ try {
     # The profile writers nest, so the lock has to be reentrant as well as
     # per-home; a non-reentrant one would deadlock the app on a plugin install.
     Assert-Contains $probe.Out 'profile lock: ok' 'the profile writer lock is reentrant and per-home'
+    # A remembered window size must degrade to "no stored bounds" rather than to
+    # a window too small to use.
+    Assert-Contains $probe.Out 'window state: ok' 'a stored window geometry is honoured only when usable'
 
     # A CLI that answers --version is not automatically one that can boot: a
     # release whose dependencies float can install a tree that fails to resolve

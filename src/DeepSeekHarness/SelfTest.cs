@@ -59,8 +59,38 @@ public static class SelfTest
         Line("plugin spec : " + SpecAnchoringChecks());
         Line("env guard   : " + EnvironmentGuardCheck(t));
         Line("profile lock: " + ProfileLockChecks());
+        Line("window state: " + WindowStateChecks());
         Line("== done ==");
         return 0;
+    }
+
+    /**
+     * The window-geometry guard. A stored size is honoured only when it could not
+     * produce a window too small to use, so a corrupt or stale geometry degrades
+     * to "no stored bounds" rather than to an unusable window.
+     */
+    internal static string WindowStateChecks()
+    {
+        var failures = new System.Collections.Generic.List<string>();
+
+        void Check(string name, bool condition)
+        {
+            if (!condition) failures.Add(name);
+        }
+
+        Check("no size means no bounds", !new AppSettings().HasWindowBounds);
+        Check("a width alone is not enough", !new AppSettings { WindowWidth = 1280 }.HasWindowBounds);
+        Check("a height alone is not enough", !new AppSettings { WindowHeight = 820 }.HasWindowBounds);
+        Check("a zero size is rejected", !new AppSettings { WindowWidth = 0, WindowHeight = 0 }.HasWindowBounds);
+        Check("a negative size is rejected", !new AppSettings { WindowWidth = -100, WindowHeight = 800 }.HasWindowBounds);
+        Check("a size below the minimum is rejected",
+            !new AppSettings { WindowWidth = 399, WindowHeight = 299 }.HasWindowBounds);
+        Check("a usable size is accepted",
+            new AppSettings { WindowWidth = 1280, WindowHeight = 820 }.HasWindowBounds);
+        Check("a position is not required",
+            new AppSettings { WindowWidth = 1280, WindowHeight = 820 }.HasWindowBounds);
+
+        return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
 
     /**

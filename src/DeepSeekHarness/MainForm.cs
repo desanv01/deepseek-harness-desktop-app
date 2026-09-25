@@ -164,6 +164,7 @@ public sealed class MainForm : Form, IBridgeHost
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(1280, 820);
         MinimumSize = new Size(860, 560);
+        RestoreWindowState();
 
         Icon = Theme.AppIcon;
         ApplyPalette(null); // sets BackColor from the OS theme before anything paints
@@ -182,10 +183,77 @@ public sealed class MainForm : Form, IBridgeHost
         Shown += OnShown;
         FormClosing += (_, _) =>
         {
+            // Before the handles go: the window's own bounds are the only place
+            // this geometry exists.
+            SaveWindowState();
             _tray?.Dispose();
             _tray = null;
             _web?.Dispose();
         };
+    }
+
+    /**
+     * Puts the window back where it was last closed, if that is still somewhere
+     * the user can see it.
+     *
+     * The stored position is checked against the current virtual screen: a window
+     * remembered on a monitor that is no longer attached would otherwise open
+     * off-screen, which looks exactly like the app failing to start. A position
+     * that fails that check is dropped and the window centres instead.
+     */
+    private void RestoreWindowState()
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            if (!settings.HasWindowBounds) return;
+
+            var width = settings.WindowWidth!.Value;
+            var height = settings.WindowHeight!.Value;
+            var bounds = new Rectangle(settings.WindowX ?? 0, settings.WindowY ?? 0, width, height);
+
+            if (settings.WindowX is int x && settings.WindowY is int y
+                && Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds)))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Location = new Point(x, y);
+            }
+            ClientSize = new Size(width, height);
+            if (settings.WindowMaximized) WindowState = FormWindowState.Maximized;
+
+            Log.Info($"restored the window to {width}x{height}"
+                     + (settings.WindowMaximized ? " (maximized)" : ""));
+        }
+        catch (Exception ex)
+        {
+            // A geometry that cannot be restored is not worth failing a launch for.
+            Log.Warn("could not restore the window state: " + ex.Message);
+        }
+    }
+
+    /** Records the window's geometry for the next launch. */
+    private void SaveWindowState()
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            // RestoreBounds is the un-maximized geometry, which is what should
+            // come back when the window is next un-maximized; Bounds would store
+            // the maximized size and lose the size the user actually chose.
+            var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+            settings.WindowX = bounds.X;
+            settings.WindowY = bounds.Y;
+            settings.WindowWidth = bounds.Width;
+            settings.WindowHeight = bounds.Height;
+            settings.WindowMaximized = WindowState == FormWindowState.Maximized;
+            settings.Save();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not save the window state: " + ex.Message);
+        }
     }
 
     /**
