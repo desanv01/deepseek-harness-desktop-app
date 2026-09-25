@@ -39,6 +39,9 @@ public sealed class Options
     /** --install-plugin: install the bundled harness plugin into the home, then exit. */
     public bool InstallPlugin { get; private set; }
 
+    /** --install-log-bridge: install the bundled log bridge into the home, then exit. */
+    public bool InstallLogBridge { get; private set; }
+
     /** --bridge-selftest: exercise the page bridge protocol without a browser. */
     public bool BridgeSelfTest { get; private set; }
 
@@ -197,6 +200,10 @@ public sealed class Options
                 case "--install-plugin":
                 case "-install-plugin":
                     o.InstallPlugin = true;
+                    break;
+                case "--install-log-bridge":
+                case "-install-log-bridge":
+                    o.InstallLogBridge = true;
                     break;
                 case "--bridge-selftest":
                 case "-bridge-selftest":

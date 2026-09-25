@@ -1,0 +1,39 @@
+﻿{
+  "name": "dsh-plugin-log-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Records the DeepSeek Harness's own runtime warnings and errors into the desktop app's log, so a boot that fails after startup can say why.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "logging"
+  ],
+  "homepage": "https://github.com/desanv01/deepseek-harness-desktop-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/desanv01/deepseek-harness-desktop-app.git",
+    "directory": "plugins/dsh-plugin-log-bridge"
+  },
+  "bugs": {
+    "url": "https://github.com/desanv01/deepseek-harness-desktop-app/issues"
+  },
+  "main": "index.js",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
+

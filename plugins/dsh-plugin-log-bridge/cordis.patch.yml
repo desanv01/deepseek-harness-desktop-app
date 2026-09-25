@@ -1,0 +1,12 @@
+# Bundle patch for dsh-plugin-log-bridge.
+#
+# The desktop app installs this package into the harness home it owns and adds
+# it to `dsh.profile.bundles`; the profile boot merges this patch, which inserts
+# the plugin row.
+#
+# The row is inserted under an id, so the app's plugin switch can disable it
+# through the profile patch layer without uninstalling the package - which is
+# the way to turn the bridge off if it ever misbehaves.
+- insert:
+    - id: desktop-log-bridge
+      name: 'dsh-plugin-log-bridge'
