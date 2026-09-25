@@ -292,6 +292,30 @@ public static class Orchestrator
                 if (trimmed != null) Log.Warn("safe mode: " + trimmed);
                 else Say("Safe mode: booting with the base bundles only");
             }
+            else
+            {
+                /*
+                 * The loader aborts the whole tree on one bad row, so a bundle
+                 * that is declared but not installed costs the entire window.
+                 * Dropping that declaration is the one repair that needs neither
+                 * a package manager nor a server, which is why it runs here - and
+                 * skipped in safe mode, whose whole point is a stack small enough
+                 * that nothing needs checking.
+                 */
+                var preflight = ProfilePreflight.Repair(home);
+                var preflightNote = preflight.Describe();
+                if (preflightNote != null)
+                {
+                    Log.Warn("preflight: " + preflightNote);
+                    Say("Profile: " + preflightNote);
+                }
+                if (preflight.Missing.Count > 0)
+                {
+                    Log.Warn("preflight: the base bundles "
+                             + string.Join(", ", preflight.Missing)
+                             + " are not installed; the harness CLI is needed to restore them");
+                }
+            }
 
             Say($"Starting the DeepSeek Harness server for {o.ProjectDir} ...");
             lease = ServerManager.Start(tools, o, status, ct);

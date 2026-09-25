@@ -770,6 +770,59 @@ try {
     $r14c = Invoke-App @('--exit-safe-mode', '--dsh-home', $f14Home) 's14-exit-again'
     Assert-True ($r14c.Code -eq 0) 'leaving safe mode twice is a clean no-op'
     Assert-True ((Get-S14Bundles) -eq $f14Start) 'the second leave changes nothing'
+
+    # --------------------------------------------------------------- scenario 15
+    Write-Step '15. a bundle that is declared but not installed is dropped before boot'
+    # The loader aborts the whole tree on one bad row, so a stale declaration
+    # costs the entire window. Dropping it needs no package manager and no
+    # server, so it happens before the harness is asked to compose anything.
+    $f15 = Join-Path $WorkRoot 's15'
+    $f15Home = Join-Path $f15 'home'
+    $f15Profile = Join-Path $f15Home 'profiles\web'
+    $f15Modules = Join-Path $f15Profile 'node_modules'
+    New-Item -ItemType Directory -Force -Path $f15Modules | Out-Null
+    New-Prefix -Path $f15 -Version '1.2.3' | Out-Null
+    Set-ScenarioPath $f15
+
+    # Three bundles are really installed; one is declared and absent.
+    foreach ($bundleName in @('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'installed-plugin')) {
+        $bundleDir = Join-Path $f15Modules $bundleName
+        New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
+        Set-Content -LiteralPath (Join-Path $bundleDir 'package.json') -Encoding ASCII `
+            -Value ('{ "name": "' + $bundleName + '", "version": "1.0.0" }')
+    }
+    $f15ManifestPath = Join-Path $f15Profile 'package.json'
+    Set-Content -LiteralPath $f15ManifestPath -Encoding UTF8 -Value @'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {},
+  "dsh": { "profile": { "bundles": [
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "installed-plugin",
+    "ghost-plugin"
+  ], "patchReload": "live" } }
+}
+'@
+
+    # The boot itself fails against a fixture CLI; the preflight runs before it.
+    $r15 = Invoke-App @('--no-window', '--project', $f15, '--dsh-home', $f15Home) 's15'
+    $f15Bundles = ((Get-Content -LiteralPath $f15ManifestPath -Raw | ConvertFrom-Json).dsh.profile.bundles -join ',')
+    Assert-True ($f15Bundles -notlike '*ghost-plugin*') 'the declaration for a missing bundle is dropped'
+    Assert-Contains $f15Bundles 'installed-plugin' 'an installed bundle keeps its place'
+    Assert-Contains $f15Bundles '@deepseek-ai/dsh-base' 'the base bundles are never removed'
+    Assert-Contains $r15.Out 'declared but not installed' 'the repair is reported to the user'
+
+    # A package directory with no manifest is a half-written install, and is not
+    # usable as a bundle layer either.
+    New-Item -ItemType Directory -Force -Path (Join-Path $f15Modules 'half-written-plugin') | Out-Null
+    $f15Again = Get-Content -LiteralPath $f15ManifestPath -Raw | ConvertFrom-Json
+    $f15Again.dsh.profile.bundles += 'half-written-plugin'
+    Set-Content -LiteralPath $f15ManifestPath -Value ($f15Again | ConvertTo-Json -Depth 8) -Encoding UTF8
+    $r15b = Invoke-App @('--no-window', '--project', $f15, '--dsh-home', $f15Home) 's15b'
+    $f15Bundles2 = ((Get-Content -LiteralPath $f15ManifestPath -Raw | ConvertFrom-Json).dsh.profile.bundles -join ',')
+    Assert-True ($f15Bundles2 -notlike '*half-written-plugin*') 'a package with no manifest counts as missing'
 }
 finally {
     Reset-Environment
