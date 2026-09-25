@@ -93,9 +93,33 @@ public static class SafeMode
 
     public sealed record Recovery(bool Recovered, string? DisabledRow, string? Bundle, string? Detail);
 
+    /**
+     * Lines the log bridge writes are diagnostics ABOUT the tree, not loader
+     * failures of it. They are prefixed so they can be told apart here: a
+     * bridged line may quote a plugin name, and letting it reach the matchers
+     * below would let it change which plugin gets blamed - and therefore which
+     * plugin a recovery pass disables.
+     */
+    private const string BridgePrefix = "[harness-log]";
+
+    /** The failure text with bridged diagnostics removed. */
+    public static string WithoutBridgeLines(string? logText)
+    {
+        if (string.IsNullOrEmpty(logText)) return string.Empty;
+        var kept = new System.Text.StringBuilder(logText.Length);
+        foreach (var line in logText.Split('\n'))
+        {
+            if (line.TrimStart().StartsWith(BridgePrefix, StringComparison.Ordinal)) continue;
+            kept.Append(line).Append('\n');
+        }
+        return kept.ToString();
+    }
+
     /** The row and package a failed boot names, if it names them. */
     public static (string? RowId, string? Package) FailedEntry(string? logText)
     {
+        // Bridged diagnostics are filtered first so they cannot name a culprit.
+        logText = WithoutBridgeLines(logText);
         if (string.IsNullOrWhiteSpace(logText)) return (null, null);
 
         var import = ImportFailedEntry.Match(logText);
