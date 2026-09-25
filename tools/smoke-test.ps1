@@ -646,6 +646,76 @@ try {
         'a request is not mistaken for the badge'
     Assert-Contains $bridgeText 'the payload is unwrapped from a stringified message' `
         'a stringified message is unwrapped'
+    # --------------------------------------------------------------- scenario 13
+    Write-Step '13. a pinned port held by another service is named, not guessed at'
+    # Exit 30 was documented but never emitted: a pinned port held by an unrelated
+    # service surfaced as a generic boot failure, hiding the one cause the user can
+    # act on. The listener here answers HTTP but is not dsh, which is exactly the
+    # case the app can classify from a probe.
+    # A raw TCP listener rather than HttpListener: it needs no URL ACL and no
+    # HTTP.sys, so the scenario runs on any runner. The listener lives in a
+    # background job because it has to be accepting while the app probes it; it
+    # reports the port it grabbed through a file.
+    $f13 = Join-Path $WorkRoot 's13'
+    New-Item -ItemType Directory -Force -Path $f13 | Out-Null
+    New-Prefix -Path $f13 -Version '1.2.3' | Out-Null
+    Set-ScenarioPath $f13
+
+    $portFile = Join-Path $WorkRoot 's13-port.txt'
+    Remove-Item -LiteralPath $portFile -Force -ErrorAction SilentlyContinue
+    $squatter = $null
+    try {
+        $squatter = Start-Job -ScriptBlock {
+            param($portFile)
+            $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+            $l.Start()
+            $port = ([System.Net.IPEndPoint]$l.LocalEndpoint).Port
+            Set-Content -LiteralPath $portFile -Value $port
+            $body = '<html><body>not dsh</body></html>'
+            $reply = "HTTP/1.1 200 OK`r`nContent-Type: text/html; charset=utf-8`r`n" +
+                     "Content-Length: $($body.Length)`r`nConnection: close`r`n`r`n$body"
+            $deadline = (Get-Date).AddSeconds(25)
+            while ((Get-Date) -lt $deadline) {
+                if ($l.Pending()) {
+                    $client = $l.AcceptTcpClient()
+                    $stream = $client.GetStream()
+                    $bytes = [System.Text.Encoding]::ASCII.GetBytes($reply)
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    $stream.Flush()
+                    Start-Sleep -Milliseconds 200
+                    $client.Close()
+                }
+                else { Start-Sleep -Milliseconds 100 }
+            }
+            $l.Stop()
+        } -ArgumentList $portFile
+    }
+    catch {
+        Write-Host ("    SKIP  a background listener was unavailable: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+
+    $f13Port = 0
+    if ($squatter) {
+        for ($i = 0; $i -lt 60 -and $f13Port -eq 0; $i++) {
+            Start-Sleep -Milliseconds 100
+            if (Test-Path -LiteralPath $portFile) { $f13Port = [int](Get-Content -LiteralPath $portFile -Raw).Trim() }
+        }
+    }
+
+    if ($f13Port -gt 0) {
+        $r13 = Invoke-App @('--no-window', '--port', "$f13Port", '--project', $f13,
+                            '--dsh-home', (Join-Path $WorkRoot 's13-home')) 's13'
+        Assert-True ($r13.Code -eq 30) ("a pinned port held by another service exits 30 (got {0})" -f $r13.Code)
+        # The app reports through its logger, which writes to stdout as well as
+        # the log file, so the message is asserted there rather than on stderr.
+        Assert-Contains $r13.Out "Port $f13Port" 'the message names the port that is held'
+        Assert-Contains $r13.Out 'already in use' 'the message says the port is in use'
+        Assert-Contains $r13.Out '--port' 'the message says how to avoid it'
+    }
+    else {
+        Write-Host '    SKIP  no listener port was reported' -ForegroundColor Yellow
+    }
+    if ($squatter) { Stop-Job $squatter -ErrorAction SilentlyContinue; Remove-Job $squatter -Force -ErrorAction SilentlyContinue }
 }
 finally {
     Reset-Environment

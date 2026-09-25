@@ -11,7 +11,7 @@
 
 DeepSeek Harness normally runs as `dsh web` in a terminal and is opened in a browser tab. This app removes that step: one executable boots the harness, renders its interface in an embedded WebView2 window, and owns the server lifecycle end to end. No terminal, no browser profiles, no manual start or stop.
 
-> **Project status:** this is a working baseline, built and verified against `@deepseek-ai/dsh` 0.1.2-rc.1 on Windows 11. The launch, attach, and shutdown paths are tested. A signed self-update is not implemented yet. See [Current status](#current-status).
+> **Project status:** this is a working baseline, built and verified against `@deepseek-ai/dsh` 0.1.5-rc.1 on Windows 11 (see [Current status](#current-status) for the exact environment). The launch, attach, and shutdown paths are tested. A signed self-update is not implemented yet.
 
 ---
 
@@ -251,7 +251,7 @@ DeepSeekHarness.exe --no-window                  headless boot test: start, veri
 
 Command-line flags always win over `settings.json`; anything not named on the command line falls back to the remembered value.
 
-Exit codes: `0` success, `1` runtime error or nothing to stop, `2` invalid arguments, `10`–`14` toolchain problems, `21`/`22` server start or verification failure, `30` endpoint occupied, `40` home owned by another instance.
+Exit codes: `0` success, `1` runtime error or nothing to stop, `2` invalid arguments, `10`–`14` toolchain problems, `21`/`22` server start or verification failure, `23` unexpected error while booting the server, `30` a pinned port is occupied by another service, `40` home owned by another instance.
 
 ## Where things live
 
