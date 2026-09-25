@@ -901,6 +901,86 @@ console.log(bad.length === 0 ? 'ok' : 'FAILED: ' + bad.join(' | '))
     else {
         Write-Host '    SKIP  node is not on PATH'
     }
+
+    # --------------------------------------------------------------- scenario 17
+    Write-Step '17. a web home is imported once, and only its declared plugins'
+    # `dsh web` keeps everything in ~/.dsh, so somebody who has been using the web
+    # UI starts with an empty desktop app. The import has to carry what makes that
+    # home theirs, carry plugin DECLARATIONS rather than a package tree it did not
+    # build, ask only once, and never write to the web home.
+    $f17 = Join-Path $WorkRoot 's17'
+    $f17Home = Join-Path $f17 'desktop-home'
+    $webHome = Join-Path $f17 'webhome'
+    New-Item -ItemType Directory -Force -Path $f17Home | Out-Null
+    New-Prefix -Path $f17 -Version '1.2.3' | Out-Null
+    Set-ScenarioPath $f17
+
+    $webProfile = Join-Path $webHome 'profiles\web'
+    foreach ($dir in @('sessions', 'storages', '.agent-presets', 'skills',
+                       'profiles\web\node_modules\some-plugin', 'profiles\web\node_modules\dshmarket')) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $webHome $dir) | Out-Null
+    }
+    Set-Content -LiteralPath (Join-Path $webHome 'settings.yaml') -Encoding ASCII -Value 'model: deepseek-chat'
+    Set-Content -LiteralPath (Join-Path $webHome '.credentials.yaml') -Encoding ASCII -Value 'api-key: fake'
+    Set-Content -LiteralPath (Join-Path $webHome 'sessions\s1.jsonl') -Encoding ASCII -Value '{"a":1}'
+    Set-Content -LiteralPath (Join-Path $webHome '.agent-presets\p1.yml') -Encoding ASCII -Value 'name: p1'
+    Set-Content -LiteralPath (Join-Path $webProfile 'package.json') -Encoding UTF8 -Value @'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": { "some-plugin": "^1.0.0", "dshmarket": "^1.45.1" },
+  "dsh": { "profile": { "bundles": [
+    "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "some-plugin"
+  ], "patchReload": "live" } }
+}
+'@
+    Set-Content -LiteralPath (Join-Path $webProfile 'cordis.patch.yml') -Encoding ASCII -Value '[]'
+    Set-Content -LiteralPath (Join-Path $webProfile 'node_modules\some-plugin\package.json') -Encoding ASCII `
+        -Value '{ "name": "some-plugin", "version": "1.0.0" }'
+    Set-Content -LiteralPath (Join-Path $webProfile 'node_modules\dshmarket\package.json') -Encoding ASCII `
+        -Value '{ "name": "dshmarket", "version": "1.45.1" }'
+    # A count of the web home's own files, to prove it is not written to.
+    $webBefore = (Get-ChildItem -LiteralPath $webHome -Recurse -File | Measure-Object).Count
+
+    # The web home is named explicitly: SpecialFolder.UserProfile is the
+    # documented way to find it and does not follow the USERPROFILE variable, so
+    # a fixture cannot be selected by setting the environment.
+    try {
+        $r17 = Invoke-App @('--import-web-home', '--dsh-home', $f17Home, '--web-home', $webHome) 's17'
+        Assert-True ($r17.Code -eq 0) ("importing a web home exits 0 (got {0})" -f $r17.Code)
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home 'settings.yaml')) 'home settings are carried over'
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home '.credentials.yaml')) 'stored credentials are carried over'
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home 'sessions\s1.jsonl')) 'sessions are carried over'
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home '.agent-presets\p1.yml')) 'agent presets are carried over'
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home 'profiles\web\cordis.patch.yml')) 'the profile patch layer is carried over'
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home 'profiles\web\node_modules\some-plugin\package.json')) `
+            'a declared community plugin keeps its declaration'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $f17Home 'profiles\web\node_modules\dshmarket'))) `
+            'a shared-tree package is not treated as a community plugin'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $f17Home 'profiles\web\node_modules\some-plugin\index.js'))) `
+            'the package tree itself is not copied'
+        $webAfter = (Get-ChildItem -LiteralPath $webHome -Recurse -File | Measure-Object).Count
+        Assert-True ($webAfter -eq $webBefore) 'the web home is left untouched'
+        Assert-True (Test-Path -LiteralPath (Join-Path $f17Home '.web-import-decision.json')) 'the decision is recorded'
+
+        # Asked once: the home now holds credentials, so a second import refuses.
+        $r17b = Invoke-App @('--import-web-home', '--dsh-home', $f17Home, '--web-home', $webHome) 's17b'
+        Assert-True ($r17b.Code -eq 1) 'a second import is refused rather than overwriting the home'
+        # This refusal is written to stderr, not through the logger.
+        Assert-Contains $r17b.Err 'would overwrite work done here' 'the refusal says why'
+
+        # The skip path records the answer and copies nothing.
+        $f17cHome = Join-Path $f17 'skipped-home'
+        New-Item -ItemType Directory -Force -Path $f17cHome | Out-Null
+        $r17c = Invoke-App @('--skip-web-home', '--dsh-home', $f17cHome, '--web-home', $webHome) 's17c'
+        Assert-True ($r17c.Code -eq 0) 'declining the import exits 0'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $f17cHome 'settings.yaml'))) 'declining copies nothing'
+        Assert-Contains (Get-Content -LiteralPath (Join-Path $f17cHome '.web-import-decision.json') -Raw) 'skipped' `
+            'declining is recorded so the offer is not repeated'
+    }
+    finally {
+        if ($savedProfile) { $env:USERPROFILE = $savedProfile }
+    }
 }
 finally {
     Reset-Environment
