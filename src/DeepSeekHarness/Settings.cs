@@ -41,6 +41,35 @@ public sealed class AppSettings
     /** Most recently opened projects, newest first. */
     public List<string> RecentProjects { get; set; } = new();
 
+    /**
+     * The main window's geometry from the last session, so a window the user
+     * sized and placed comes back that way. Null until a window has been closed
+     * at least once.
+     *
+     * The normal bounds are stored rather than the current ones, so a window
+     * closed while maximized or minimized still remembers the size to restore to
+     * when it is un-maximized.
+     */
+    public int? WindowX { get; set; }
+    public int? WindowY { get; set; }
+    public int? WindowWidth { get; set; }
+    public int? WindowHeight { get; set; }
+    public bool WindowMaximized { get; set; }
+
+    /**
+     * Whether there is a usable geometry to restore. A stored size smaller than
+     * the window's own minimum is treated as absent rather than honoured, so a
+     * corrupt or stale value cannot produce a window too small to use.
+     */
+    public bool HasWindowBounds
+    {
+        get
+        {
+            if (WindowWidth is not int width || WindowHeight is not int height) return false;
+            return width >= 400 && height >= 300;
+        }
+    }
+
     public static AppSettings Load()
     {
         try
