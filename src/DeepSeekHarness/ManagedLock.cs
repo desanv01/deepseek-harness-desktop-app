@@ -17,9 +17,22 @@ public sealed class ManagedLock : IDisposable
     }
 
     public static ManagedLock TryAcquireHome(string home)
-        => TryAcquireNamed(AppPaths.HomeMutexName(home), "home " + home);
+        => AcquireNamed(AppPaths.HomeMutexName(home), "home " + home, TimeSpan.Zero);
 
-    private static ManagedLock TryAcquireNamed(string name, string label)
+    /**
+     * Serialises the profile's read-modify-write pairs for one home.
+     *
+     * Waiting is bounded and a timeout is not treated as failure: the writers
+     * this guards are small file rewrites, and the CLI itself touches the same
+     * manifest. A lock that cannot be taken within the budget leaves the write
+     * to proceed - a lost update on a plugin row is a smaller harm than refusing
+     * to record what the user asked for, and the write is itself atomic.
+     */
+    public static ManagedLock TryAcquireProfileWriter(string home, TimeSpan? budget = null)
+        => AcquireNamed(AppPaths.ProfileWriterMutexName(home), "the profile of " + home,
+                        budget ?? TimeSpan.FromSeconds(5));
+
+    private static ManagedLock AcquireNamed(string name, string label, TimeSpan budget)
     {
         Mutex? mutex = null;
         try
@@ -28,7 +41,11 @@ public sealed class ManagedLock : IDisposable
             var owner = false;
             try
             {
-                owner = mutex.WaitOne(0);
+                owner = mutex.WaitOne(budget);
+                if (!owner)
+                {
+                    Log.Warn($"another writer held the lock for {label}; proceeding without it");
+                }
             }
             catch (AbandonedMutexException)
             {

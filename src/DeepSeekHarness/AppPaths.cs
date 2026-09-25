@@ -90,6 +90,17 @@ public static class AppPaths
     public static string HomeMutexName(string home)
         => "Local\\DeepSeekHarness-home-" + HomeKey(home);
 
+    /**
+     * Guards the profile's own files, separately from the home lock.
+     *
+     * The home lock decides who may run a server; this one only serialises the
+     * read-modify-write pairs on `package.json` and `cordis.patch.yml`. They are
+     * different concerns: a plugin toggle happens while a server is already
+     * running, and it must not have to take the home lock to write two files.
+     */
+    public static string ProfileWriterMutexName(string home)
+        => "Local\\DeepSeekHarness-profile-" + HomeKey(home);
+
     /** One server per home: the owner publishes its endpoint here for attachers. */
     public static string HomeLeaseFile(string home)
         => Path.Combine(Root, "instance-" + HomeKey(home) + ".json");

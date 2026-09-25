@@ -235,6 +235,9 @@ try {
     # The harness must not inherit code-resolution variables from whatever shell
     # started the app; the check spawns a real node child to confirm it.
     Assert-Contains $probe.Out 'env guard   : ok' 'the harness child drops code-resolution variables'
+    # The profile writers nest, so the lock has to be reentrant as well as
+    # per-home; a non-reentrant one would deadlock the app on a plugin install.
+    Assert-Contains $probe.Out 'profile lock: ok' 'the profile writer lock is reentrant and per-home'
 
     # A CLI that answers --version is not automatically one that can boot: a
     # release whose dependencies float can install a tree that fails to resolve

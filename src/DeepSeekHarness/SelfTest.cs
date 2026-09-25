@@ -58,8 +58,47 @@ public static class SelfTest
         Line("redaction   : " + RedactionChecks());
         Line("plugin spec : " + SpecAnchoringChecks());
         Line("env guard   : " + EnvironmentGuardCheck(t));
+        Line("profile lock: " + ProfileLockChecks());
         Line("== done ==");
         return 0;
+    }
+
+    /**
+     * The profile writer lock. Two things must hold: a nested acquisition on
+     * this thread succeeds (the writers call each other, so a non-reentrant lock
+     * would deadlock the app), and two homes never share one lock.
+     */
+    internal static string ProfileLockChecks()
+    {
+        var failures = new System.Collections.Generic.List<string>();
+        const string homeA = @"C:\home-a";
+        const string homeB = @"C:\home-b";
+
+        if (AppPaths.ProfileWriterMutexName(homeA) == AppPaths.ProfileWriterMutexName(homeB))
+        {
+            failures.Add("two homes share one lock name");
+        }
+        if (AppPaths.ProfileWriterMutexName(homeA) == AppPaths.HomeMutexName(homeA))
+        {
+            failures.Add("the profile lock and the home lock are the same mutex");
+        }
+
+        using (var first = ManagedLock.TryAcquireProfileWriter(homeA))
+        {
+            if (!first.Owner) failures.Add("the first acquisition did not take the lock");
+            using (var nested = ManagedLock.TryAcquireProfileWriter(homeA))
+            {
+                if (!nested.Owner) failures.Add("a nested acquisition deadlocked");
+            }
+        }
+
+        // Released: a later acquisition must succeed straight away.
+        using (var again = ManagedLock.TryAcquireProfileWriter(homeA, TimeSpan.FromMilliseconds(200)))
+        {
+            if (!again.Owner) failures.Add("the lock stayed held after disposal");
+        }
+
+        return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
 
     /**

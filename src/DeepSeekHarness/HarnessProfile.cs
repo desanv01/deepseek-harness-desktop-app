@@ -296,6 +296,9 @@ public static class HarnessProfile
     public static string? SetRowDisabled(string home, string rowId, bool disabled)
     {
         if (string.IsNullOrWhiteSpace(rowId)) return "no plugin row was named";
+        // Read-modify-write on one file: two toggles racing would each read the
+        // pre-change lines and the second would drop the first one's row.
+        using var writer = ManagedLock.TryAcquireProfileWriter(home);
         try
         {
             Directory.CreateDirectory(Dir(home));
