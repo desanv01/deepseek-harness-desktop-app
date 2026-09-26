@@ -143,6 +143,23 @@ public static class ServerManager
 
         status?.Invoke("Waiting for the harness to report its address ...");
         var deadline = DateTime.UtcNow.AddSeconds(o.ReadyTimeoutSec);
+
+        /*
+         * A harness that is still composing its plugin tree and one that has
+         * wedged look identical from here - both are silent - so the wait reports
+         * GROWTH rather than just elapsed time. A server that is writing output
+         * is working; one that has produced nothing at all is the case worth
+         * naming, because that is a harness that never got started rather than
+         * one that is slow.
+         *
+         * The observed output is passed to the caller through LastFailure so the
+         * eventual timeout can say which of the two happened instead of only how
+         * long it waited.
+         */
+        var started = DateTime.UtcNow;
+        long observedBytes = 0;
+        var lastProgressAt = started;
+        var lastHeartbeat = started;
         while (!ready.Task.IsCompleted && DateTime.UtcNow < deadline)
         {
             if (ct.IsCancellationRequested) break;
@@ -152,6 +169,30 @@ public static class ServerManager
                 Log.Error(LastFailure);
                 break;
             }
+
+            // The drain writes the log; its length is the only progress signal
+            // available without reading the child's pipe away from the parser.
+            var size = FileLength(outLog) + FileLength(errLog);
+            if (size > observedBytes)
+            {
+                observedBytes = size;
+                lastProgressAt = DateTime.UtcNow;
+            }
+
+            // Every 15s: enough to show life on a slow boot, rare enough not to
+            // flood the splash or the log.
+            if ((DateTime.UtcNow - lastHeartbeat).TotalSeconds >= 15)
+            {
+                lastHeartbeat = DateTime.UtcNow;
+                var elapsed = (int)(DateTime.UtcNow - started).TotalSeconds;
+                var quiet = (int)(DateTime.UtcNow - lastProgressAt).TotalSeconds;
+                var note = observedBytes == 0
+                    ? $"{elapsed}s elapsed, no output yet"
+                    : $"{elapsed}s elapsed, {observedBytes} bytes written, quiet for {quiet}s";
+                Log.Info($"still waiting for the ready line: {note}");
+                status?.Invoke($"Waiting for the harness to report its address ({note}) ...");
+            }
+
             ready.Task.Wait(200);
         }
 
@@ -162,7 +203,12 @@ public static class ServerManager
         }
         if (!ready.Task.IsCompleted)
         {
-            LastFailure = $"the managed server did not print a ready line within {o.ReadyTimeoutSec}s";
+            var quietFor = (int)(DateTime.UtcNow - lastProgressAt).TotalSeconds;
+            LastFailure = observedBytes == 0
+                ? $"the managed server printed nothing in {o.ReadyTimeoutSec}s, so it never "
+                  + "reached the point of reporting an address"
+                : $"the managed server did not print a ready line within {o.ReadyTimeoutSec}s "
+                  + $"({observedBytes} bytes written, then quiet for {quietFor}s)";
             Log.Error($"{LastFailure}; logs: {outLog}");
             StopProcess(spawned, job);
             return null;
@@ -267,8 +313,25 @@ public static class ServerManager
         return 0;
     }
 
-    private static void StopProcess(SpawnedProcess spawned, JobObject? job)
+    /**
+     * A log file's length, or 0 when it does not exist yet. Used as the progress
+     * signal while waiting for the ready line: the drain writes these files, so
+     * growth means the server is still producing output.
+     */
+    private static long FileLength(string path)
     {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static void StopProcess(SpawnedProcess spawned, JobObject? job)    {
         Proc.KillTreeIfStartTime(spawned.Pid, spawned.StartTimeUtc);
         try { job?.Dispose(); } catch { }
     }
