@@ -189,9 +189,11 @@ public static class ServerManager
     {
         var stored = ReadLease(AppPaths.HomeLeaseFile(o.ResolveHome()));
         if (stored == null) return null;
-        if (!Proc.IsAlive(stored.Pid))
+        // Identity, not just liveness: a reused PID would otherwise let this
+        // adopt a stranger's process and then report it as this home's server.
+        if (!Proc.MatchesStartTime(stored.Pid, stored.StartTimeUtc))
         {
-            Log.Info("the recorded server for this home is no longer running; ignoring its lease");
+            Log.Info("the recorded server for this home is gone or its PID was reused; ignoring its lease");
             return null;
         }
         if (!TryParseEndpoint(stored.Url, out var port, out var token)) return null;
@@ -212,7 +214,9 @@ public static class ServerManager
         var path = AppPaths.HomeLeaseFile(home);
         var stored = ReadLease(path);
         if (stored == null) return;
-        if (Proc.IsAlive(stored.Pid)) return;
+        // Same identity rule as adoption: a lease naming a reused PID is stale
+        // too, and leaving it would keep a stranger's process recorded as ours.
+        if (Proc.MatchesStartTime(stored.Pid, stored.StartTimeUtc)) return;
         Log.Info("removing a stale server lease for this home");
         RemoveLease(path);
     }

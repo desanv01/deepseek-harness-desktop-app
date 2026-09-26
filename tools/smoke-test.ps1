@@ -243,6 +243,9 @@ try {
     Assert-Contains $probe.Out 'window state: ok' 'a stored window geometry is honoured only when usable'
     # A plugin with no published version must not be reported as up to date.
     Assert-Contains $probe.Out 'plugin versions: ok' 'the plugin version comparison does not invent a direction'
+    # A PID is not an identity: every lease decision - adopt, stop, discard as
+    # stale - resolves against the recorded start time, in one place.
+    Assert-Contains $probe.Out 'lease identity: ok' 'a lease is trusted only while the process identity still matches'
 
     # A CLI that answers --version is not automatically one that can boot: a
     # release whose dependencies float can install a tree that fails to resolve

@@ -61,8 +61,45 @@ public static class SelfTest
         Line("profile lock: " + ProfileLockChecks());
         Line("window state: " + WindowStateChecks());
         Line("plugin versions: " + PluginVersionChecks());
+        Line("lease identity: " + LeaseIdentityChecks());
         Line("== done ==");
         return 0;
+    }
+
+    /**
+     * The process-identity rule every lease decision rests on, exercised against
+     * this process - a real subject, so the answer means something.
+     */
+    internal static string LeaseIdentityChecks()
+    {
+        var failures = new System.Collections.Generic.List<string>();
+
+        void Check(string name, bool condition)
+        {
+            if (!condition) failures.Add(name);
+        }
+
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var pid = self.Id;
+        var started = self.StartTime.ToUniversalTime();
+
+        Check("this process matches its own recorded start time",
+            Proc.MatchesStartTime(pid, started));
+        // A recorded time from a different process instance must not match, or a
+        // reused PID would be adopted as ours.
+        Check("a start time two minutes off does not match",
+            !Proc.MatchesStartTime(pid, started.AddMinutes(-2)));
+        Check("a start time far in the future does not match",
+            !Proc.MatchesStartTime(pid, started.AddHours(1)));
+        Check("a start time a minute off does not match",
+            !Proc.MatchesStartTime(pid, started.AddMinutes(1)));
+        // Absent identity is never a match, so a lease without one cannot be adopted.
+        Check("a missing start time never matches",
+            !Proc.MatchesStartTime(pid, DateTime.MinValue));
+        Check("a zero or negative pid never matches",
+            !Proc.MatchesStartTime(0, started) && !Proc.MatchesStartTime(-1, started));
+
+        return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
 
     /**
