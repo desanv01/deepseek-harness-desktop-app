@@ -51,6 +51,7 @@ $originalPath = $env:PATH
 $originalAppData = $env:APPDATA
 $originalDesktopHome = $env:DSH_DESKTOP_HOME
 $originalHarnessHome = $env:DSH_HOME
+$originalNpmPrefix = $env:npm_config_prefix
 
 function Write-Step { param([string]$Text) Write-Host ("==> {0}" -f $Text) -ForegroundColor Cyan }
 function Write-Ok { param([string]$Text) Write-Host ("    PASS  {0}" -f $Text) -ForegroundColor Green; $script:Passed++ }
@@ -186,6 +187,20 @@ function Set-ScenarioPath {
     $env:DSH_DESKTOP_HOME = Join-Path $WorkRoot 'data'
     $env:DSH_HOME = Join-Path $WorkRoot 'harness-home'
 
+    # Point npm's install prefix at the fixture, always.
+    #
+    # Two scenarios drive `--update`, which runs `npm install -g
+    # @deepseek-ai/dsh@latest`. That is a REAL install command, and npm reads the
+    # target prefix from npm_config_prefix before it reads its own configuration.
+    # Without this the scenarios install into, or move aside, whatever harness the
+    # machine actually has - which is a surprising thing for a test suite to do to
+    # the machine it runs on, and is exactly what happened here: the global
+    # install was found empty after a suite run.
+    #
+    # The fixture already carries a fake npm for those scenarios; this makes the
+    # real one, if it is ever reached, unable to touch the real prefix.
+    $env:npm_config_prefix = $Prefix
+
     if ($RealHarness) {
         # Plugin scenarios need the machine's own harness CLI, so leave APPDATA
         # alone: that is where the app looks for the global npm install.
@@ -206,6 +221,8 @@ function Reset-Environment {
     $env:DSH_DESKTOP_HOME = $originalDesktopHome
     $env:DSH_HOME = $originalHarnessHome
     $env:APPDATA = $originalAppData
+    if ($null -eq $originalNpmPrefix) { Remove-Item Env:npm_config_prefix -ErrorAction SilentlyContinue }
+    else { $env:npm_config_prefix = $originalNpmPrefix }
 }
 
 Write-Host ("smoke test: {0}" -f $Exe) -ForegroundColor Cyan
