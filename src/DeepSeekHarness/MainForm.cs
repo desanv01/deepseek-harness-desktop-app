@@ -106,6 +106,15 @@ public sealed class MainForm : Form, IBridgeHost
     private readonly string? _recovered;
 
     /**
+     * Renderer recoveries attempted in this session. A renderer that keeps dying
+     * is not something a reload fixes, and an unbounded reload loop would hide
+     * the failure behind a flashing window, so the app tries once and then says
+     * what happened.
+     */
+    private int _rendererRecoveries;
+    private const int MaxRendererRecoveries = 1;
+
+    /**
      * Starts the embedded browser's process tree before the window exists, so
      * the seconds WebView2 spends starting up overlap the server boot instead of
      * following it. The result is handed to the form, which navigates as soon as
@@ -786,6 +795,7 @@ public sealed class MainForm : Form, IBridgeHost
                     web.DefaultBackgroundColor = CurrentBackground();
                     web.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
                     web.CoreWebView2.WebMessageReceived += OnWebMessage;
+                    web.CoreWebView2.ProcessFailed += OnProcessFailed;
                     _ = web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(DesktopBridge.Script(AppInfo.Version));
                     _ = web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(BadgeScript);
                     web.CoreWebView2.Navigate(_url);
@@ -1249,6 +1259,64 @@ public sealed class MainForm : Form, IBridgeHost
     }
 
     private Color CurrentBackground() => _pageBg ?? Theme.Background;
+
+    /**
+     * A browser process died. Without this the window simply goes white, which
+     * reads as the app hanging rather than as the renderer being gone - and the
+     * most common cause (the browser process being killed under memory pressure,
+     * or crashing on a page the harness served) is survivable.
+     *
+     * The failure is logged first, because the kind and reason are the only
+     * evidence of what happened and the renderer cannot report it. Then a reload
+     * is attempted once: a browser process that died is replaced on the next
+     * navigation, so this usually brings the page back. A second failure is
+     * reported instead of retried, since a renderer that keeps dying is not
+     * something reloading fixes.
+     */
+    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
+    {
+        try
+        {
+            var kind = e.ProcessFailedKind.ToString();
+            var reason = e.Reason.ToString();
+            var detail = e.ExitCode != 0 ? $" exit {e.ExitCode}" : "";
+            Log.Error($"the embedded browser failed: {kind} ({reason}{detail})");
+
+            if (IsDisposed) return;
+
+            if (_rendererRecoveries < MaxRendererRecoveries && e.ProcessFailedKind != CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                _rendererRecoveries++;
+                Log.Warn($"reloading the page after the browser process failed (attempt {_rendererRecoveries})");
+                SetStatus("The embedded browser stopped. Reloading ...");
+                try
+                {
+                    // A browser process that died is replaced on the next
+                    // navigation. Reload would ask the dead one.
+                    _web?.CoreWebView2?.Navigate(_url);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("could not reload after the browser failed: " + ex.Message);
+                }
+            }
+
+            // BrowserProcessExited cannot be recovered in place - there is no
+            // browser left to navigate - and neither can a repeat failure.
+            SetStatus(e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited
+                ? "The embedded browser stopped and could not be restarted.\n\n"
+                  + "Close this window and launch DeepSeek Harness again."
+                : $"The embedded browser failed ({kind}).\n\n"
+                  + "Close this window and launch DeepSeek Harness again. See the log for details.");
+        }
+        catch (Exception ex)
+        {
+            // A handler that throws here would replace the visible failure with
+            // a silent one.
+            Log.Warn("the browser-failure handler itself failed: " + ex.Message);
+        }
+    }
 
     private void SetStatus(string text)
     {
