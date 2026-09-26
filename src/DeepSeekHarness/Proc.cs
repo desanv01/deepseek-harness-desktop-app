@@ -167,8 +167,20 @@ public static class Proc
         }
     }
 
-    /** Kill only when the PID still refers to the recorded process instance. */
-    public static bool KillTreeIfStartTime(int pid, DateTime expectedStartTimeUtc)
+    /**
+     * Whether a PID still refers to the process instance that was recorded.
+     *
+     * A PID alone is not an identity: Windows reuses them, so a lease written by
+     * a server that has since died can name a live process belonging to something
+     * else. Every decision taken from a lease - adopting it, stopping it,
+     * discarding it as stale - has to answer this question, so it is answered in
+     * one place rather than once per caller with different strictness.
+     *
+     * The window is loose on purpose (two seconds): a recorded start time is
+     * rounded on its way through JSON, and being strict here would make a live
+     * server look foreign.
+     */
+    public static bool MatchesStartTime(int pid, DateTime expectedStartTimeUtc)
     {
         if (pid <= 0 || expectedStartTimeUtc == DateTime.MinValue) return false;
         try
@@ -176,7 +188,21 @@ public static class Proc
             using var p = Process.GetProcessById(pid);
             if (p.HasExited) return false;
             var actual = p.StartTime.ToUniversalTime();
-            if ((actual - expectedStartTimeUtc).Duration() > TimeSpan.FromSeconds(2)) return false;
+            return (actual - expectedStartTimeUtc).Duration() <= TimeSpan.FromSeconds(2);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /** Kill only when the PID still refers to the recorded process instance. */
+    public static bool KillTreeIfStartTime(int pid, DateTime expectedStartTimeUtc)
+    {
+        if (!MatchesStartTime(pid, expectedStartTimeUtc)) return false;
+        try
+        {
+            using var p = Process.GetProcessById(pid);
             p.Kill(entireProcessTree: true);
             p.WaitForExit(5000);
             return true;
