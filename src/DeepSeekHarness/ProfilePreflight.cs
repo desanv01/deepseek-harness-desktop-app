@@ -21,8 +21,9 @@ namespace DShNative;
  * Deliberately narrow:
  *
  *   - It removes third-party declarations only. The base bundles are the
- *     harness's own and are not this app's to remove; if one is missing the
- *     profile needs the CLI, not a guess.
+ *     harness's own and are not this app's to remove or to judge: they resolve
+ *     from the harness's installation rather than from the profile, so their
+ *     absence here is normal and is not reported.
  *   - It never touches package files, user patch rows, or plugin data. The
  *     package is left on disk so a reinstall is a manifest line away.
  *   - It does not execute plugin code and does not claim the profile will boot
@@ -32,10 +33,7 @@ namespace DShNative;
 public static class ProfilePreflight
 {
     /** What a preflight pass found and changed. */
-    public sealed record Result(
-        IReadOnlyList<string> Dropped,
-        IReadOnlyList<string> Missing,
-        string? Error)
+    public sealed record Result(IReadOnlyList<string> Dropped, string? Error)
     {
         public bool Changed => Dropped.Count > 0;
 
@@ -56,35 +54,35 @@ public static class ProfilePreflight
     public static Result Repair(string home)
     {
         var dropped = new List<string>();
-        var missing = new List<string>();
         try
         {
-            if (!HarnessProfile.Exists(home)) return new Result(dropped, missing, null);
+            if (!HarnessProfile.Exists(home)) return new Result(dropped, null);
 
             var modules = HarnessProfile.ModulesDir(home);
             foreach (var bundle in HarnessProfile.ReadBundles(home))
             {
-                if (HarnessProfile.BaseBundles.Contains(bundle, StringComparer.OrdinalIgnoreCase))
-                {
-                    // The harness's own rows: report a missing one, never remove it.
-                    if (!IsInstalled(modules, bundle)) missing.Add(bundle);
-                    continue;
-                }
+                // The base bundles resolve from the harness's own installation,
+                // not from the profile's node_modules - a working profile
+                // normally has neither of them on disk here. Treating their
+                // absence as a fault warned on every real boot with a real
+                // harness, so they are left alone: they are the harness's rows,
+                // and the harness is the authority on resolving them.
+                if (HarnessProfile.BaseBundles.Contains(bundle, StringComparer.OrdinalIgnoreCase)) continue;
 
                 if (IsInstalled(modules, bundle)) continue;
 
                 var error = HarnessProfile.RemoveBundle(home, bundle);
-                if (error != null) return new Result(dropped, missing, error);
+                if (error != null) return new Result(dropped, error);
                 dropped.Add(bundle);
                 Log.Warn($"preflight: {bundle} is declared in the profile but not installed; "
                          + "removing the declaration so the loader does not abort on it");
             }
 
-            return new Result(dropped, missing, null);
+            return new Result(dropped, null);
         }
         catch (Exception ex)
         {
-            return new Result(dropped, missing, "the profile could not be checked: " + ex.Message);
+            return new Result(dropped, "the profile could not be checked: " + ex.Message);
         }
     }
 
