@@ -365,12 +365,6 @@ public static class Orchestrator
                     Log.Warn("preflight: " + preflightNote);
                     Say("Profile: " + preflightNote);
                 }
-                if (preflight.Missing.Count > 0)
-                {
-                    Log.Warn("preflight: the base bundles "
-                             + string.Join(", ", preflight.Missing)
-                             + " are not installed; the harness CLI is needed to restore them");
-                }
             }
 
             Say($"Starting the DeepSeek Harness server for {o.ProjectDir} ...");
