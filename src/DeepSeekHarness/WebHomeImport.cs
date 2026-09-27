@@ -164,6 +164,31 @@ public static class WebHomeImport
            && Inspect(webHome).Exists
            && DesktopHomeIsUnused(home);
 
+    /**
+     * One line per condition behind {@link ShouldOffer}, for diagnosis.
+     *
+     * The offer is gated on three independent facts, and "no prompt appeared" does
+     * not say which of them decided it - a web home that was never used, a home
+     * that already has data, and a question already answered all look the same
+     * from the outside. Naming them makes the behaviour checkable rather than
+     * inferred, and tells a user why they were not asked.
+     */
+    public static IReadOnlyList<string> ExplainOffer(string home, string webHome)
+    {
+        var decision = Decision(home);
+        var preview = Inspect(webHome);
+        var unused = DesktopHomeIsUnused(home);
+        return new List<string>
+        {
+            $"web home    : {webHome}",
+            $"web content : {preview.Describe()}",
+            $"desktop home: {home}",
+            $"desktop used: {(unused ? "no" : "yes")}",
+            $"recorded    : {decision ?? "(nothing yet)"}",
+            $"would offer : {(ShouldOffer(home, webHome) ? "yes" : "no")}",
+        };
+    }
+
     /** Records that the user said no, so the offer is not repeated. */
     public static string? Skip(string home, string webHome)
         => WriteDecision(home, "skipped", webHome, null);
@@ -408,6 +433,13 @@ public static class WebHomeImport
         var preview = Inspect(webHome);
         Console.WriteLine($"found       : {preview.Describe()}");
         Console.WriteLine($"recorded    : {Decision(home) ?? "(nothing yet)"}");
+
+        // The three conditions behind the offer, so "no prompt appeared" has a
+        // named cause instead of being guessed at.
+        if (!skip)
+        {
+            foreach (var line in ExplainOffer(home, webHome)) Console.WriteLine("  " + line);
+        }
 
         if (skip)
         {
