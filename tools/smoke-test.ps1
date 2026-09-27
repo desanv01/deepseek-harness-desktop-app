@@ -52,6 +52,8 @@ $originalAppData = $env:APPDATA
 $originalDesktopHome = $env:DSH_DESKTOP_HOME
 $originalHarnessHome = $env:DSH_HOME
 $originalNpmPrefix = $env:npm_config_prefix
+# Armed only while an --update scenario runs; see Set-ScenarioPath.
+$script:AuditNpm = $false
 
 function Write-Step { param([string]$Text) Write-Host ("==> {0}" -f $Text) -ForegroundColor Cyan }
 function Write-Ok { param([string]$Text) Write-Host ("    PASS  {0}" -f $Text) -ForegroundColor Green; $script:Passed++ }
@@ -200,6 +202,36 @@ function Set-ScenarioPath {
     # The fixture already carries a fake npm for those scenarios; this makes the
     # real one, if it is ever reached, unable to touch the real prefix.
     $env:npm_config_prefix = $Prefix
+
+    # ...and report if the app would run an install through an npm outside the
+    # fixture. Only the scenarios that drive `--update` arm this, because only
+    # they run `npm install -g @deepseek-ai/dsh@latest`: npm discovery walks every
+    # PATH entry and then the npm global folder, taking the first npm shim whose
+    # node_modules/npm/bin/npm-cli.js exists, so a fixture without that file does
+    # not shadow the machine's npm.
+    #
+    # npm_config_prefix above is what stops such an install landing in the real
+    # prefix. This makes the remaining possibility visible instead of silent.
+    if ($script:AuditNpm) {
+        # The app writes to stderr freely, and a fixture npm prints too; under the
+        # error preference in force here that would terminate the suite, so the
+        # call is explicitly non-terminating.
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $resolved = & $Exe --self-test 2>&1 | Select-String -Pattern '^npm cli\s+:\s*(.+)$'
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+        if ($resolved) {
+            $npmPath = $resolved.Matches[0].Groups[1].Value.Trim()
+            if ($npmPath -ne 'NOT FOUND' -and -not $npmPath.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                Write-Host ("    NOTE  an install would run through npm outside the fixture: {0}" -f $npmPath) -ForegroundColor Yellow
+                Write-Host ("          fixture is {0}; npm_config_prefix keeps it out of the real prefix" -f $Prefix) -ForegroundColor Yellow
+            }
+        }
+    }
 
     if ($RealHarness) {
         # Plugin scenarios need the machine's own harness CLI, so leave APPDATA
@@ -367,6 +399,7 @@ try {
     New-Prefix -Path $f5 -Version '5.0.0' | Out-Null
     New-FakeNpm -Path $f5 -Mode 'broken' | Out-Null
     Set-ScenarioPath $f5
+    $script:AuditNpm = $true
     $env:DSH_DESKTOP_HOME = Join-Path $WorkRoot 's5-data'
     $project = Join-Path $WorkRoot 's5-project'
     New-Item -ItemType Directory -Force -Path $project | Out-Null
@@ -387,6 +420,7 @@ try {
     New-Prefix -Path $f6 -Version '6.0.0' | Out-Null
     New-FakeNpm -Path $f6 -Mode 'ok' -NewVersion '9.9.9' | Out-Null
     Set-ScenarioPath $f6
+    $script:AuditNpm = $true
     $env:DSH_DESKTOP_HOME = Join-Path $WorkRoot 's6-data'
     $project = Join-Path $WorkRoot 's6-project'
     New-Item -ItemType Directory -Force -Path $project | Out-Null
@@ -1057,3 +1091,4 @@ Write-Host ''
 Write-Host ("{0} passed, {1} failed" -f $script:Passed, $script:Failed) -ForegroundColor ($(if ($script:Failed -eq 0) { 'Green' } else { 'Red' }))
 if ($script:Failed -gt 0) { exit 1 }
 exit 0
+

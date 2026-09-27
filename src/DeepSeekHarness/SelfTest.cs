@@ -25,6 +25,14 @@ public static class SelfTest
         Line("== DeepSeek Harness self test ==");
         Line("node        : " + (t.Node ?? "NOT FOUND"));
         Line("npm cli     : " + (t.NpmCli ?? "NOT FOUND"));
+        // Which npm would run `npm install -g`, and the prefix it would write into.
+        //
+        // These are read here rather than carried on Tools: discovery walks PATH
+        // and then the npm global folder, so the npm reached is not always the one
+        // a caller expected - but resolving the prefix costs an npm invocation,
+        // and paying that on every Discover would change what the app runs. The
+        // one place the answer matters is a diagnostic and the update path.
+        Line("npm prefix  : " + (NpmGlobalPrefix(t) ?? "unknown"));
         Line("dsh state   : " + Describe(t));
         Line("dsh entry   : " + (t.DshCli ?? "NOT FOUND"));
         Line("dsh version : " + (t.DshVersion ?? "n/a"));
@@ -345,6 +353,32 @@ public static class SelfTest
             "failed to apply loader entry real-plugin: boom\n");
 
         return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
+    }
+
+    /**
+     * The global prefix the resolved npm reports, asked on demand.
+     *
+     * This is what `npm install -g` would write into, so it is the one fact that
+     * says where an install would land. It is not part of {@link Tools.Discover}
+     * because answering it costs an npm invocation, and discovery runs on every
+     * launch - paying that to print a diagnostic would change what the app runs.
+     */
+    internal static string? NpmGlobalPrefix(Tools t)
+    {
+        if (string.IsNullOrEmpty(t.Node) || string.IsNullOrEmpty(t.NpmCli)) return null;
+        try
+        {
+            var outFile = AppPaths.NewLogPath("npm-prefix", ".txt");
+            var code = Proc.Run(t.Node!, new[] { t.NpmCli!, "prefix", "-g" }, outFile, null, 30_000);
+            if (code != 0 || !File.Exists(outFile)) return null;
+            var text = File.ReadAllText(outFile).Trim();
+            return text.Length == 0 ? null : text;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("could not ask npm for its global prefix: " + ex.Message);
+            return null;
+        }
     }
 
     /** "found 0.1.5-rc.1", "incomplete (an interrupted npm install)" or "not installed". */
