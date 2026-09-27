@@ -290,6 +290,9 @@ try {
     # A remembered window size must degrade to "no stored bounds" rather than to
     # a window too small to use.
     Assert-Contains $probe.Out 'window state: ok' 'a stored window geometry is honoured only when usable'
+    # A position remembered on a monitor that is no longer attached must be
+    # dropped, or the window opens off-screen and looks like a failed start.
+    Assert-Contains $probe.Out 'window restore: ok' 'an off-screen window position is dropped, the size kept'
     # A plugin with no published version must not be reported as up to date.
     Assert-Contains $probe.Out 'plugin versions: ok' 'the plugin version comparison does not invent a direction'
     # A PID is not an identity: every lease decision - adopt, stop, discard as
