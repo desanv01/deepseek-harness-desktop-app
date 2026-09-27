@@ -225,6 +225,13 @@ public static class DesktopPlugin
         version = null;
         try
         {
+            // The profile has to exist before a package can be registered in it.
+            // Without this, the files were written and the install then failed with
+            // "the profile manifest is missing" - on a brand-new home, which is
+            // exactly when someone would run this.
+            var initError = HarnessProfile.Ensure(home, Tools.Discover());
+            if (initError != null) return initError;
+
             var v = BundledVersion(LogBridgeFiles, "logbridge");
             version = v;
             if (v == null) return "the bundled log bridge is missing its package.json";
