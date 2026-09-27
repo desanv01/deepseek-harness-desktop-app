@@ -202,36 +202,62 @@ public sealed class MainForm : Form, IBridgeHost
     }
 
     /**
+     * What a stored geometry should be restored to, decided without a window.
+     *
+     * Split out from {@link RestoreWindowState} so the decision - the part that
+     * can be wrong in a way a user notices - is testable without a screen. The
+     * caller applies it to the form.
+     */
+    internal readonly record struct WindowRestore(int Width, int Height, Point? Location, bool Maximized);
+
+    /**
+     * Decides what to restore. A position is only offered when it is still on a
+     * screen, so a window remembered on a monitor that is no longer attached does
+     * not open off-screen - which looks exactly like the app failing to start.
+     * `screens` is the working areas to test against, in the form the caller has
+     * available; passing them keeps this free of WinForms.
+     */
+    internal static WindowRestore? DecideRestore(
+        AppSettings settings,
+        IReadOnlyList<Rectangle> screens)
+    {
+        if (!settings.HasWindowBounds) return null;
+
+        var width = settings.WindowWidth!.Value;
+        var height = settings.WindowHeight!.Value;
+
+        Point? location = null;
+        if (settings.WindowX is int x && settings.WindowY is int y)
+        {
+            var bounds = new Rectangle(x, y, width, height);
+            if (screens.Any(screen => screen.IntersectsWith(bounds))) location = new Point(x, y);
+        }
+        return new WindowRestore(width, height, location, settings.WindowMaximized);
+    }
+
+    /**
      * Puts the window back where it was last closed, if that is still somewhere
      * the user can see it.
-     *
-     * The stored position is checked against the current virtual screen: a window
-     * remembered on a monitor that is no longer attached would otherwise open
-     * off-screen, which looks exactly like the app failing to start. A position
-     * that fails that check is dropped and the window centres instead.
      */
     private void RestoreWindowState()
     {
         try
         {
-            var settings = AppSettings.Load();
-            if (!settings.HasWindowBounds) return;
+            var decided = DecideRestore(AppSettings.Load(),
+                Screen.AllScreens.Select(s => s.WorkingArea).ToList());
+            if (decided == null) return;
+            var restore = decided.Value;
 
-            var width = settings.WindowWidth!.Value;
-            var height = settings.WindowHeight!.Value;
-            var bounds = new Rectangle(settings.WindowX ?? 0, settings.WindowY ?? 0, width, height);
-
-            if (settings.WindowX is int x && settings.WindowY is int y
-                && Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds)))
+            if (restore.Location is Point location)
             {
                 StartPosition = FormStartPosition.Manual;
-                Location = new Point(x, y);
+                Location = location;
             }
-            ClientSize = new Size(width, height);
-            if (settings.WindowMaximized) WindowState = FormWindowState.Maximized;
+            ClientSize = new Size(restore.Width, restore.Height);
+            if (restore.Maximized) WindowState = FormWindowState.Maximized;
 
-            Log.Info($"restored the window to {width}x{height}"
-                     + (settings.WindowMaximized ? " (maximized)" : ""));
+            Log.Info($"restored the window to {restore.Width}x{restore.Height}"
+                     + (restore.Maximized ? " (maximized)" : ""));
         }
         catch (Exception ex)
         {

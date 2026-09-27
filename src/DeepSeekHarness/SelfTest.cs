@@ -68,6 +68,7 @@ public static class SelfTest
         Line("env guard   : " + EnvironmentGuardCheck(t));
         Line("profile lock: " + ProfileLockChecks());
         Line("window state: " + WindowStateChecks());
+        Line("window restore: " + WindowRestoreChecks());
         Line("plugin versions: " + PluginVersionChecks());
         Line("lease identity: " + LeaseIdentityChecks());
         Line("== done ==");
@@ -136,6 +137,63 @@ public static class SelfTest
         // Unparseable input reports "no opinion" rather than a direction.
         Check("an unparseable version is not newer", PluginUpdateCheck.Compare("nightly", "1.0.0"), 0);
         Check("a missing version is not newer", PluginUpdateCheck.Compare(null, "1.0.0"), 0);
+
+        return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
+    }
+
+    /**
+     * The window-restore decision, which is the half a user notices: a stored
+     * position is only honoured when it is still on a screen. A window remembered
+     * on a monitor that is no longer attached would otherwise open off-screen,
+     * which looks exactly like the app failing to start.
+     */
+    internal static string WindowRestoreChecks()
+    {
+        var failures = new System.Collections.Generic.List<string>();
+
+        void Check(string name, bool condition)
+        {
+            if (!condition) failures.Add(name);
+        }
+
+        // One screen at the origin, and a second to the right of it.
+        var screens = new List<System.Drawing.Rectangle>
+        {
+            new(0, 0, 1920, 1080),
+            new(1920, 0, 1920, 1080),
+        };
+
+        // Nothing stored: no decision at all, so the window keeps its default.
+        Check("no stored geometry means no restore",
+            MainForm.DecideRestore(new AppSettings(), screens) == null);
+
+        // On screen: both the size and the position come back.
+        var onScreen = MainForm.DecideRestore(
+            new AppSettings { WindowX = 100, WindowY = 100, WindowWidth = 1280, WindowHeight = 820 }, screens);
+        Check("an on-screen position is restored", onScreen is { Location: not null });
+        Check("the size is restored", onScreen is { Width: 1280, Height: 820 });
+
+        // On the second monitor: still on screen, so still restored.
+        var second = MainForm.DecideRestore(
+            new AppSettings { WindowX = 2000, WindowY = 50, WindowWidth = 800, WindowHeight = 600 }, screens);
+        Check("a position on a second monitor is restored", second is { Location: not null });
+
+        // Far off to the right: no screen covers it, so only the size is used and
+        // the caller centres instead.
+        var offScreen = MainForm.DecideRestore(
+            new AppSettings { WindowX = 9000, WindowY = 100, WindowWidth = 1280, WindowHeight = 820 }, screens);
+        Check("an off-screen position is dropped", offScreen is { Location: null });
+        Check("the size is still honoured off-screen", offScreen is { Width: 1280, Height: 820 });
+
+        // A size with no position: honoured, and nothing is placed.
+        var noPosition = MainForm.DecideRestore(
+            new AppSettings { WindowWidth = 1024, WindowHeight = 768 }, screens);
+        Check("a size without a position is honoured", noPosition is { Width: 1024, Location: null });
+
+        // Maximized is carried through, because the size is the un-maximized one.
+        var maximized = MainForm.DecideRestore(
+            new AppSettings { WindowWidth = 1280, WindowHeight = 820, WindowMaximized = true }, screens);
+        Check("the maximized flag is carried", maximized is { Maximized: true });
 
         return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
