@@ -339,6 +339,107 @@ try {
         if ($harnessBootError) { Write-Host ('    harness error: ' + $harnessBootError) -ForegroundColor Yellow }
     }
 
+    # How this harness build treats a plugin that throws while it activates is a
+    # BEHAVIOUR CHANGE, not a detail: older builds abort the whole profile and the
+    # app's safe-mode recovery is what gets the server up, while newer builds warn
+    # ("did not activate"), skip the entry, and serve anyway - so there is nothing
+    # to recover from and the app's job is to report the warning rather than act.
+    # Scenario 9 asserts one or the other, so which one it is has to be measured
+    # rather than assumed: CI installs @latest, and a green run silently became a
+    # red one when latest moved from 0.1.5-rc.3 to 0.1.7-rc.2.
+    $harnessSkipsFailedPlugins = $false
+    $harnessSilentlyWedges = $false
+    if ($harnessBoots) {
+        $probePluginHome = Join-Path $WorkRoot 'plugin-probe-home'
+        $probeThrower = Join-Path $probePluginHome 'profiles\web\node_modules\dsh-plugin-thrower'
+        New-Item -ItemType Directory -Force -Path $probeThrower, (Join-Path $probePluginHome 'profiles\web') | Out-Null
+        Set-Content -LiteralPath (Join-Path $probeThrower 'package.json') -Encoding ASCII -Value @'
+{
+  "name": "dsh-plugin-thrower",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": { "default": "./index.js" } },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $probeThrower 'cordis.patch.yml') -Encoding ASCII -Value @'
+- insert:
+    - id: thrower
+      name: 'dsh-plugin-thrower'
+'@
+        # A REAL plugin that fails to ACTIVATE, not a module that fails to import.
+        #
+        # This distinction decided a whole assertion. A bare top-level throw makes
+        # the import fail, and the harness then has no entry and no plugin to
+        # describe: it prints "failed to import" and nothing else, so there is no
+        # per-plugin reason to carry through. Exporting apply() and throwing from
+        # it is what a genuinely broken plugin does, and it is the only shape that
+        # makes the harness name the plugin and quote its message.
+        Set-Content -LiteralPath (Join-Path $probeThrower 'index.js') -Encoding ASCII -Value @'
+export const name = 'dsh-plugin-thrower'
+export const inject = []
+export function apply() { throw new Error('probe: this plugin cannot load') }
+'@
+        Set-Content -LiteralPath (Join-Path $probePluginHome 'profiles\web\package.json') -Encoding ASCII -Value @'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": { "dsh-plugin-thrower": "file:./node_modules/dsh-plugin-thrower" },
+  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-plugin-thrower"], "patchReload": "live" } }
+}
+'@
+        # The patch layer has to exist and be a valid empty list; the app writes
+        # its own rows here, and a fixture that cannot be parsed would fail the
+        # probe for the wrong reason.
+        Set-Content -LiteralPath (Join-Path $probePluginHome 'profiles\web\cordis.patch.yml') -Encoding ASCII -Value '[]'
+
+        $env:DSH_HOME = $probePluginHome
+        $probePluginOut = Join-Path $WorkRoot 'plugin-probe.out.txt'
+        $probePluginErr = Join-Path $WorkRoot 'plugin-probe.err.txt'
+        $pluginServer = $null
+        try {
+            $pluginServer = Start-Process -FilePath (Get-Command node).Source `
+                -ArgumentList @($harnessEntry, 'web', '--no-open', '--host', '127.0.0.1', '--port', '0') `
+                -RedirectStandardOutput $probePluginOut -RedirectStandardError $probePluginErr `
+                -NoNewWindow -PassThru
+            # Waited on the way up AND the way down. A harness that refuses to
+            # serve does not necessarily say so: 0.1.5-rc.3 wedges with a failed
+            # plugin and writes NOTHING, ever, on either stream - which is the
+            # exact defect upstream carries patch-package patches for. Watching
+            # only for a ready line cannot tell that apart from a slow boot, so
+            # the probe also records whether any diagnostic arrived at all.
+            $bootedWithBadPlugin = $false
+            $sawDiagnostic = $false
+            for ($i = 0; $i -lt 25 -and -not $pluginServer.HasExited; $i++) {
+                Start-Sleep -Seconds 1
+                if ((Test-Path -LiteralPath $probePluginOut) -and
+                    (Get-Content -LiteralPath $probePluginOut -Raw) -match 'dsh web:\s+http://') {
+                    $bootedWithBadPlugin = $true
+                    break
+                }
+                if ((Test-Path -LiteralPath $probePluginErr) -and
+                    (Get-Item -LiteralPath $probePluginErr).Length -gt 0) {
+                    $sawDiagnostic = $true
+                }
+            }
+            # A build that serves anyway warns AND stays up. A build that aborts
+            # at least says why. Neither one wedges in silence.
+            $harnessSkipsFailedPlugins = $bootedWithBadPlugin
+            if (-not $bootedWithBadPlugin -and -not $sawDiagnostic) {
+                $harnessSilentlyWedges = $true
+            }
+        }
+        finally {
+            if ($pluginServer -and -not $pluginServer.HasExited) {
+                Stop-Process -Id $pluginServer.Id -Force -ErrorAction SilentlyContinue
+            }
+            $env:DSH_HOME = $originalHarnessHome
+        }
+    }
+    Write-Host ("    harness tolerates a plugin that fails to activate: {0}" -f $(if ($harnessSkipsFailedPlugins) { 'yes, it warns and serves' } elseif ($harnessSilentlyWedges) { 'no, it wedges and says nothing' } else { 'no, it aborts and says why' }))
+
     # ---------------------------------------------------------------- scenario 1
     Write-Step '1. a shim on PATH names the CLI, so the app finds it'
     $f1 = Join-Path $WorkRoot 's1'
@@ -540,10 +641,11 @@ try {
         Set-Content -LiteralPath (Join-Path $thrower 'package.json') -Encoding ASCII -Value @'
 {
   "name": "dsh-plugin-thrower",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "index.js",
+  "exports": { ".": { "default": "./index.js" } },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
 }
 '@
@@ -552,8 +654,14 @@ try {
     - id: thrower
       name: 'dsh-plugin-thrower'
 '@
-        Set-Content -LiteralPath (Join-Path $thrower 'index.js') -Encoding ASCII `
-            -Value "throw new Error('smoke test: this plugin cannot load')"
+        # Exported apply() that throws, for the same reason as the probe above: a
+        # top-level throw fails the import, which is a different failure the
+        # harness reports without naming a plugin or quoting its message.
+        Set-Content -LiteralPath (Join-Path $thrower 'index.js') -Encoding ASCII -Value @'
+export const name = 'dsh-plugin-thrower'
+export const inject = []
+export function apply() { throw new Error('smoke test: this plugin cannot load') }
+'@
         $throwerManifest = @'
 {
   "name": "dsh-profile-web",
@@ -570,11 +678,66 @@ try {
         New-Item -ItemType Directory -Force -Path $project | Out-Null
 
         $r = Invoke-App @('--no-window', '--dsh-home', $f9, '--project', $project, '--ready-timeout', '240') 's9'
-        Assert-True ($r.Code -eq 0) 'the boot recovers and exits 0'
-        Assert-Contains $r.Out 'safe mode' 'the recovery is reported'
-        Assert-Contains $r.Out 'dsh-plugin-thrower' 'the culprit is named'
         $patch = Get-Content -LiteralPath (Join-Path $f9 'profiles\web\cordis.patch.yml') -Raw
-        Assert-True ($patch -like '*thrower*' -and $patch -like '*disabled: true*') 'its row is disabled in the patch layer'
+
+        # Three harness behaviours reach this point, and the app's correct answer
+        # differs between them. Which one is in play was measured in the probe
+        # above rather than assumed, because the older answer silently stopped
+        # being true when CI's @latest moved on.
+        if ($harnessSkipsFailedPlugins) {
+            Assert-True ($r.Code -eq 0) 'the app boots with a plugin that cannot load'
+            # 0.1.7+: the harness warned, skipped the row, and served anyway.
+            Assert-Contains $r.Out 'a plugin did not activate' 'the skipped plugin is reported to the user'
+            Assert-Contains $r.Out 'dsh-plugin-thrower' 'the culprit is named'
+            Assert-Contains $r.Out 'this plugin cannot load' 'the harness''s own reason for the failure is carried through'
+            # Deliberately NOT a fault: the boot succeeded, so nothing is disabled
+            # and the user's patch layer is left exactly as they wrote it.
+            Assert-True ($patch -notlike '*disabled: true*') 'a plugin the harness was content to skip is not disabled'
+        }
+        elseif ($harnessSilentlyWedges) {
+            # 0.1.5-rc.3 on this machine: a failed plugin wedges the harness with
+            # no output on either stream, so no boot can be recovered and there is
+            # no culprit on disk to name. The only honest expectation is that the
+            # app gives up and says the harness never reported an address - and
+            # this arm exists so the suite states that instead of asserting a
+            # recovery the harness cannot support.
+            Assert-True ($r.Code -ne 0) 'the app fails instead of hanging when the harness never speaks'
+            Assert-Contains $r.Out 'Failed to start the dsh web server' 'the user is told the server did not start'
+            Assert-Contains $r.Out 'did not name a plugin row' 'the app says it found nothing to act on'
+            Assert-True ($patch -notlike '*disabled: true*') 'nothing is disabled when nothing was named'
+        }
+        else {
+            Assert-True ($r.Code -eq 0) 'the boot recovers and exits 0'
+            # A build that aborts the profile but explains itself: the app can
+            # read the row and disable it, so there is a server afterwards.
+            Assert-Contains $r.Out 'safe mode' 'the recovery is reported'
+            Assert-Contains $r.Out 'dsh-plugin-thrower' 'the culprit is named'
+            Assert-True ($patch -like '*thrower*' -and $patch -like '*disabled: true*') 'its row is disabled in the patch layer'
+        }
+
+        # This scenario is also the only place the app reads a server log while
+        # that server is STILL RUNNING, which is where the diagnostics live. That
+        # read is what the reporting above depends on, so it is asserted directly:
+        # the log must be readable and must contain the harness's own words, or
+        # the assertions above pass only by accident of the boot succeeding.
+        $s9Logs = Join-Path (Join-Path $WorkRoot 's9-data') 'logs'
+        $s9Err = Get-ChildItem $s9Logs -Filter 'server-*.err.log' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Assert-True ($null -ne $s9Err) 'the live server log exists'
+        if ($s9Err -and -not $harnessSilentlyWedges) {
+            $s9Text = ''
+            try {
+                # The same shared read the app performs, from the test side. If the
+                # app cannot read this file, neither can this.
+                $s9Stream = [System.IO.File]::Open($s9Err.FullName, 'Open', 'Read', 'ReadWrite, Delete')
+                $s9Reader = New-Object System.IO.StreamReader($s9Stream)
+                $s9Text = $s9Reader.ReadToEnd()
+                $s9Reader.Close(); $s9Stream.Close()
+            }
+            catch { $s9Text = '' }
+            Assert-Contains $s9Text 'did not activate' 'the live log is readable and explains itself'
+        }
+
         if ($r.Code -ne 0) {
             # A recovery that did not happen is worth the app's own account of
             # why, printed where CI can show it instead of in a fixture file.
@@ -582,7 +745,7 @@ try {
             ($r.Out -split "`n" | Select-Object -Last 25) | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) }
             if ($r.Err) { ($r.Err -split "`n" | Select-Object -Last 10) | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) } }
             Write-Host '    --- server log ---' -ForegroundColor Yellow
-            Get-ChildItem (Join-Path (Join-Path $WorkRoot 's9-data') 'logs') -Filter 'server-*.out.log' -ErrorAction SilentlyContinue |
+            Get-ChildItem $s9Logs -Filter 'server-*.out.log' -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
                 ForEach-Object { Get-Content $_.FullName -Tail 25 | ForEach-Object { Write-Host ('    ' + $_.TrimEnd()) } }
         }

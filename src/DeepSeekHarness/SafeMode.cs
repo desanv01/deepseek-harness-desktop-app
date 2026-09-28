@@ -115,6 +115,64 @@ public static class SafeMode
         return kept.ToString();
     }
 
+    /**
+     * Newer harnesses report a plugin that failed to activate WITHOUT aborting
+     * the tree - the server starts and the bad entry is simply skipped:
+     *
+     *     dsh: warning: 1 entry did not activate
+     *     thrower (dsh-plugin-thrower): Error: <reason>
+     *
+     * That is a better failure mode than the old one, and it means no recovery is
+     * needed. But nothing in the app read it, so a plugin silently not loading
+     * looked the same as one that loaded - the user had no way to know, and no
+     * reason to look in the server log. This names it.
+     *
+     * The detail line repeats the row id and the package, so both are taken from
+     * it; the package is the useful one, since that is what a disable acts on.
+     *
+     * The reason is deliberately NOT anchored at end of line. The harness prints
+     * whatever the plugin threw, and a thrown Error's message is itself usually
+     * colon-shaped - "Error: boom" - so an anchored group matches only the
+     * tidiest half of the real cases and silently reports no reason for the rest.
+     * `.*` already stops at the newline.
+     */
+    private static readonly Regex NotActivated = new(
+        @"^\s*(?<id>\S+)\s*\((?<pkg>[^)\r\n]+)\)\s*:\s*(?<reason>.*)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    /** The "N entry did not activate" warning, when the harness printed one. */
+    public static bool ReportedInactiveEntry(string? logText)
+    {
+        if (string.IsNullOrEmpty(logText)) return false;
+        return WithoutBridgeLines(logText)
+            .Contains("did not activate", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /** The row and package a skipped entry names, in the newer harness's wording. */
+    public static (string? RowId, string? Package, string? Reason) InactiveEntry(string? logText)
+    {
+        var text = WithoutBridgeLines(logText);
+        if (text.Length == 0 || !ReportedInactiveEntry(text)) return (null, null, null);
+
+        var match = NotActivated.Match(text);
+        if (!match.Success) return (null, null, null);
+        var package = match.Groups["pkg"].Value.Trim();
+        var reason = match.Groups["reason"].Value.Trim();
+        return (match.Groups["id"].Value.Trim(),
+                package.Length == 0 ? null : package,
+                reason.Length == 0 ? null : reason);
+    }
+
+    /** One line naming a plugin that did not activate, or null when none did. */
+    public static string? DescribeInactiveEntry(string? logText)
+    {
+        var (rowId, package, reason) = InactiveEntry(logText);
+        if (rowId == null && package == null) return null;
+        var who = package ?? rowId;
+        return $"{who} did not activate{(reason == null ? "" : ": " + reason)}. "
+               + "The harness started without it; disable or update it to stop this.";
+    }
+
     /** The row and package a failed boot names, if it names them. */
     public static (string? RowId, string? Package) FailedEntry(string? logText)
     {
@@ -153,16 +211,30 @@ public static class SafeMode
         return null;
     }
 
-    /** The tail of a failed server's output, which is where the loader explains itself. */
+    /**
+     * The tail of a failed server's output, which is where the loader explains itself.
+     *
+     * Read through SHARED handles on purpose. The whole point of this text is to
+     * explain a server that is still running - a live child holds its own stdout
+     * and stderr open, and another app instance may be writing the same home's
+     * lease. File.ReadAllText asks for FileShare.Read, which a live writer cannot
+     * always grant, so the read failed with "being used by another process" and
+     * the caller was handed an empty string: the diagnostics existed on disk and
+     * the app reported nothing. Sharing everything the writers allow costs
+     * nothing and is the difference between reading the log and not.
+     */
     public static string ReadFailureText(ServerLease? lease = null)
     {
         var text = new System.Text.StringBuilder();
-        foreach (var path in new[] { ServerManager.LastOutLog, ServerManager.LastErrLog })
+        var logs = lease != null
+            ? new[] { lease.OutLog, lease.ErrLog }
+            : new[] { ServerManager.LastOutLog, ServerManager.LastErrLog };
+        foreach (var path in logs)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
             try
             {
-                var content = File.ReadAllText(path);
+                var content = ReadShared(path);
                 text.AppendLine(content.Length > 8000 ? content[^8000..] : content);
             }
             catch (Exception ex)
@@ -171,6 +243,24 @@ public static class SafeMode
             }
         }
         return text.ToString();
+    }
+
+    /**
+     * Reads a log another process may be holding open. SequentialScan keeps the
+     * file off the OS read cache, because these tails are read once and are
+     * almost always a few kilobytes.
+     */
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            64 * 1024,
+            FileOptions.SequentialScan);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     /**

@@ -331,6 +331,75 @@ public static class ServerManager
         }
     }
 
+    /**
+     * Waits for the boot's diagnostics to reach the log before anyone reads them.
+     *
+     * The ready line arrives on stdout and the explanation for a skipped plugin
+     * arrives on stderr. Those are two pipes drained by two tasks, so their order
+     * at the reader is whatever the OS and the scheduler decide - measured at
+     * 8 ms apart, which is a race, not an ordering.
+     *
+     * Nor is the explanation one write. The harness flushes the summary line and
+     * the detail line separately, and the app was caught in between: it reported
+     * "did not activate: failed to import" where the plugin's own message was
+     * still in flight, which is a wrong reason stated confidently. Waiting for the
+     * file to stop growing does not fix that either, because the gap between the
+     * two writes is itself quiet.
+     *
+     * So this waits for the message to be COMPLETE, using the fact that the
+     * harness prints a stack trace underneath the detail line: the warning is over
+     * when its last frame has landed. A boot that never announces one costs only
+     * one poll - the ordinary clean boot leaves immediately.
+     */
+    public static void WaitForOutputToSettle(ServerLease? lease, CancellationToken ct = default)
+    {
+        var errLog = lease?.ErrLog ?? LastErrLog;
+        var deadline = DateTime.UtcNow.AddMilliseconds(2000);
+        long readAtLength = -1;
+        var errorText = "";
+        while (!ct.IsCancellationRequested)
+        {
+            // Re-read only when the file has actually grown. Polling is cheap, but
+            // reading the whole tail is not, and a plugin that logs freely during
+            // boot would otherwise be re-read dozens of times for no new bytes.
+            var length = string.IsNullOrEmpty(errLog) ? 0 : FileLength(errLog);
+            if (length != readAtLength)
+            {
+                readAtLength = length;
+                errorText = string.IsNullOrEmpty(errLog) ? "" : ReadSharedQuietly(errLog);
+            }
+
+            // Nothing announced: there is no diagnostic coming, so never wait.
+            if (!errorText.Contains("did not activate", StringComparison.Ordinal)) return;
+
+            // Announced and complete. The trace frames are the terminator; without
+            // them the reason may still be growing, so keep polling until the
+            // bound expires rather than reporting half a sentence.
+            if (errorText.Contains("    at ", StringComparison.Ordinal)) return;
+
+            if (DateTime.UtcNow >= deadline) return;
+            try { Task.Delay(40, ct).GetAwaiter().GetResult(); } catch (Exception) { return; }
+        }
+    }
+
+    /** Reads a log for inspection; an empty string whenever that is not possible. */
+    private static string ReadSharedQuietly(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                64 * 1024, FileOptions.SequentialScan);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
     private static void StopProcess(SpawnedProcess spawned, JobObject? job)    {
         Proc.KillTreeIfStartTime(spawned.Pid, spawned.StartTimeUtc);
         try { job?.Dispose(); } catch { }

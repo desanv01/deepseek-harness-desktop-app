@@ -376,7 +376,12 @@ public static class Orchestrator
                  * the app would simply never open. The loader names the row it
                  * choked on, so disable that one and try again - once - before
                  * reporting a failure.
+                 *
+                 * The log is given a moment to settle first: this is the read that
+                 * decides WHICH row to disable, and a truncated tail would either
+                 * name nothing or name the wrong plugin.
                  */
+                ServerManager.WaitForOutputToSettle(lease: null, ct);
                 var failure = SafeMode.ReadFailureText();
                 var recovery = SafeMode.DisableFailedPlugin(home, failure);
                 if (recovery.Recovered)
@@ -432,6 +437,34 @@ public static class Orchestrator
             }
 
             Say("Server is ready");
+
+            /*
+             * The ready line and the plugin diagnostics travel on different pipes,
+             * so the log is given a moment to go quiet before it is read as the
+             * record of this boot. See WaitForOutputToSettle for why that is a
+             * race rather than an ordering.
+             */
+            ServerManager.WaitForOutputToSettle(lease, ct);
+
+            /*
+             * A newer harness does not abort the tree for a plugin that fails to
+             * activate: it warns, skips the entry, and serves anyway. That is a
+             * better failure mode than the old one, but nothing read the warning,
+             * so a plugin silently not loading looked exactly like one that had
+             * loaded - the user had no way to know and no reason to open the
+             * server log.
+             *
+             * Reported, and deliberately NOT treated as a fault: the boot
+             * succeeded, and disabling a plugin the harness was content to skip
+             * would be the app overriding a decision that was already correct.
+             */
+            var inactive = SafeMode.DescribeInactiveEntry(SafeMode.ReadFailureText(lease));
+            if (inactive != null)
+            {
+                Log.Warn("a plugin did not activate: " + inactive);
+                status?.Invoke(inactive);
+            }
+
             SafeMode.RememberGoodBoot(home, tools);
             return new Outcome
             {

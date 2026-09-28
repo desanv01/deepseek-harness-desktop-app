@@ -410,6 +410,33 @@ public static class SelfTest
                 $"failed to apply loader entry real-plugin: boom\n[harness-log] error fake-plugin failed"),
             "failed to apply loader entry real-plugin: boom\n");
 
+        /*
+         * The reason a skipped plugin gives is whatever the plugin threw, and a
+         * thrown Error's message is itself colon-shaped. An anchored capture
+         * quietly dropped the reason for exactly those cases - which is all of
+         * them, in practice - so the message the user saw named the package but
+         * never said what went wrong. Both spellings are pinned here.
+         */
+        const string nested = "dsh: warning: 1 entry did not activate\n"
+                            + "thrower (dsh-plugin-thrower): Error: this plugin cannot load\n"
+                            + "    at new apply (file:///c:/tmp/index.js:3:31)";
+        Check("a colon-shaped reason is carried",
+            SafeMode.DescribeInactiveEntry(nested),
+            "dsh-plugin-thrower did not activate: Error: this plugin cannot load. "
+            + "The harness started without it; disable or update it to stop this.");
+
+        const string plainReason = "dsh: warning: 1 entry did not activate\n"
+                                 + "thrower (dsh-plugin-thrower): boom";
+        Check("a plain reason is carried",
+            SafeMode.DescribeInactiveEntry(plainReason),
+            "dsh-plugin-thrower did not activate: boom. "
+            + "The harness started without it; disable or update it to stop this.");
+
+        // A boot that said nothing about a skipped entry must stay silent rather
+        // than invent one; this is the ordinary successful boot.
+        Check("a clean boot reports nothing",
+            SafeMode.DescribeInactiveEntry("dsh web: http://127.0.0.1:4567/?token=***\n"), null);
+
         return failures.Count == 0 ? "ok" : "FAILED (" + string.Join("; ", failures) + ")";
     }
 

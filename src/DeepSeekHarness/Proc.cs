@@ -256,11 +256,17 @@ public static class Proc
     private static async Task DrainStdoutAsync(Process p, FileStream so, Action<string>? onStdoutLine)
     {
         using var reader = new StreamReader(p.StandardOutput.BaseStream);
-        using var writer = new StreamWriter(so);
+        // AutoFlush releases each line from the writer to the file stream, but the
+        // FILE STREAM has a buffer of its own - without flushing that too, output
+        // reached disk only when the stream was disposed, and under keep-alive the
+        // drain's dispose does not run until the app exits. The harness's own
+        // output is the evidence a failed boot needs, so it goes to disk per line.
+        using var writer = new StreamWriter(so) { AutoFlush = true };
         string? line;
         while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
         {
             await writer.WriteLineAsync(Redact.Line(line)).ConfigureAwait(false);
+            await so.FlushAsync().ConfigureAwait(false);
             if (onStdoutLine != null)
             {
                 try { onStdoutLine(line); } catch (Exception ex) { Log.Warn("stdout hook failed: " + ex.Message); }
@@ -276,11 +282,13 @@ public static class Proc
     private static async Task DrainStderrAsync(Process p, FileStream se)
     {
         using var reader = new StreamReader(p.StandardError.BaseStream);
-        using var writer = new StreamWriter(se);
+        // Flushed per line for the same reason as stdout.
+        using var writer = new StreamWriter(se) { AutoFlush = true };
         string? line;
         while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
         {
             await writer.WriteLineAsync(Redact.Line(line)).ConfigureAwait(false);
+            await se.FlushAsync().ConfigureAwait(false);
         }
         await writer.FlushAsync().ConfigureAwait(false);
     }
