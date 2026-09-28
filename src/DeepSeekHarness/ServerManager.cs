@@ -355,9 +355,19 @@ public static class ServerManager
     {
         var errLog = lease?.ErrLog ?? LastErrLog;
         var deadline = DateTime.UtcNow.AddMilliseconds(2000);
+        long readAtLength = -1;
+        var errorText = "";
         while (!ct.IsCancellationRequested)
         {
-            var errorText = string.IsNullOrEmpty(errLog) ? "" : ReadSharedQuietly(errLog);
+            // Re-read only when the file has actually grown. Polling is cheap, but
+            // reading the whole tail is not, and a plugin that logs freely during
+            // boot would otherwise be re-read dozens of times for no new bytes.
+            var length = string.IsNullOrEmpty(errLog) ? 0 : FileLength(errLog);
+            if (length != readAtLength)
+            {
+                readAtLength = length;
+                errorText = string.IsNullOrEmpty(errLog) ? "" : ReadSharedQuietly(errLog);
+            }
 
             // Nothing announced: there is no diagnostic coming, so never wait.
             if (!errorText.Contains("did not activate", StringComparison.Ordinal)) return;
