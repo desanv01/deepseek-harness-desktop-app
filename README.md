@@ -1,17 +1,17 @@
 # DeepSeek Harness Desktop App
 
-**A native Windows desktop app for DeepSeek Harness — it starts the harness server on launch, opens straight into your project, and shuts the server down when you close the window.**
+**A native Windows desktop app for DeepSeek Harness — it starts the harness server on launch, opens straight into your project, and owns the server's lifetime end to end.**
 
 ![MIT](https://img.shields.io/badge/license-MIT-green)
 ![Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-0078d4)
 ![.NET](https://img.shields.io/badge/.NET-8-512bd4)
 ![C%23](https://img.shields.io/badge/C%23-WinForms-239120)
 ![WebView2](https://img.shields.io/badge/WebView2-Evergreen-1f6feb)
-![Status](https://img.shields.io/badge/status-working%20baseline-orange)
+![Status](https://img.shields.io/badge/status-complete%20and%20working-brightgreen)
 
 DeepSeek Harness normally runs as `dsh web` in a terminal and is opened in a browser tab. This app removes that step: one executable boots the harness, renders its interface in an embedded WebView2 window, and owns the server lifecycle end to end. No terminal, no browser profiles, no manual start or stop.
 
-> **Project status:** this is a working baseline, built and verified against `@deepseek-ai/dsh` 0.1.5-rc.1 on Windows 11 (see [Current status](#current-status) for the exact environment). The launch, attach, and shutdown paths are tested. A signed self-update is not implemented yet.
+> **Project status:** this app is complete and working, built and verified against `@deepseek-ai/dsh` 0.1.5-rc.3 on Windows 11 (see [Current status](#current-status) for the exact environment and how it was checked). The launch, attach, keep-alive, and shutdown paths are tested end to end. A signed self-update is not implemented — update downloads are checksum-verified, not signature-verified.
 
 ---
 
@@ -29,12 +29,13 @@ DeepSeek Harness normally runs as `dsh web` in a terminal and is opened in a bro
 
 Running the harness by hand means opening a terminal, changing into a project directory, typing a command, copying a tokenized URL, and remembering to stop the server afterwards. That is friction on every session, and it is easy to leave an orphaned server holding a port.
 
-This app turns that sequence into a double-click, and makes the server's lifetime the same as the window's lifetime:
+This app turns that sequence into a double-click, and manages the server's lifetime for you:
 
 - no terminal and no command to remember;
 - the window opens on the project you selected, not a generic dashboard;
 - the port is chosen by the operating system, so there is nothing to conflict with;
-- closing the window stops the server, and so does crashing the app.
+- the server is killed by the OS if the app dies, so a crash never leaves an orphan holding a port — except under keep-alive, where surviving is the point and the lease plus `--stop` do the cleanup;
+- by default the server outlives the window, so closing and reopening is an attach rather than a fresh boot. The tray's "Stop server and exit" and `--stop` end it, and `--no-keep-alive` restores stop-on-close.
 
 The goal is a dependable desktop shell for a local harness — not a launcher script with a window bolted on.
 
@@ -42,15 +43,15 @@ The goal is a dependable desktop shell for a local harness — not a launcher sc
 
 - **No-terminal launch** — starts `dsh web --no-open` as a hidden child process. No console window is ever shown.
 - **Fast launch** — the CLI is probed cheaply (0.2 s) instead of being verified with a full `dsh web --help` (7–8 s) before every boot; the deep check runs only as diagnosis when something fails. The embedded browser is warmed while the server boots, the two update checks wait for the first paint, and — with keep-alive on — a later launch attaches to the running server in seconds instead of booting.
-- **The harness keeps running** — by default the server outlives the window, so closing and reopening the app is an attach rather than a boot. The tray's "Stop server and exit" and `--stop` end it, and `--no-keep-alive` restores "closing the window stops the server".
+- **The harness keeps running** — by default the server outlives the window. Closing the window *detaches* from it, and the next launch attaches to the running server rather than booting a new one. The tray's "Stop server and exit" and `--stop` end it; `--no-keep-alive` restores "closing the window stops the server".
 - **Remembers your project** — the chosen folder, home, and port are saved to `settings.json`. Later launches open the same project with no flags; the first launch shows a picker with your recent projects.
 - **Opens your project** — `--project <dir>` becomes the server's working directory, which is what scopes the harness workspace. The window title shows the project name.
 - **OS-assigned port** — starts with `--port 0` and reads the real address from the ready line the harness prints, so port conflicts cannot happen.
 - **Verified endpoint** — confirms the served root document contains the DSH bootstrap global before showing it, so an unrelated local service is never embedded.
-- **Guaranteed shutdown** — the child is assigned to a Windows job object with kill-on-close. When the app exits, crashes, or is force-killed, the server and its descendants are terminated by the OS.
+- **Guaranteed shutdown when keep-alive is off** — the child is assigned to a Windows job object with kill-on-close, so when the app exits, crashes, or is force-killed, the server and its descendants are terminated by the OS. Keep-alive turns this off deliberately, because the server outliving the process is the whole point; there the lease, the next launch's adoption, and `--stop` are what clean up.
 - **One server per home** — a named mutex keyed by `DSH_HOME` means a second launch hands focus to the running window instead of starting a second writer over the same session files.
 - **Tray icon** — present for the whole window lifetime: hide the window to the tray, bring it back, open the project folder or the log directory, see the installed harness version, check for a newer harness, and stop the server.
-- **Ordinary window behavior** — minimizing minimizes to the taskbar like any other window; hiding to the tray is an explicit tray-menu action, and closing the window still stops the server.
+- **Ordinary window behavior** — minimizing minimizes to the taskbar like any other window, and hiding to the tray is an explicit tray-menu action. Closing the window detaches from the server rather than stopping it, because keep-alive is on by default; use the tray's "Stop server and exit", `--stop`, or `--no-keep-alive`.
 - **Harness version aware** — on launch it reads the npm `latest` and `alpha` dist-tags once and shows the result in the tray. The check is read-only; installing is a deliberate click that verifies the CLI before the window restarts.
 - **Finds the harness wherever npm put it** — the CLI is located the way a shell locates it: the `dsh` shim on `PATH` is read for the entry point it runs, the package's own `package.json` `bin` is honoured, and a global prefix outside `PATH` is found through `npm prefix -g`. A custom npm prefix, a pnpm-style store, or a package layout change therefore still resolves.
 - **Repairs a broken harness install** — an interrupted `npm install -g` leaves the package directory behind without the files the CLI needs. The app says exactly that instead of claiming the harness is not installed, and offers to install it; `--update` does the same without asking, and `--repair-harness` does it from a script. Before npm touches a working install, the app moves it aside and puts it back if the result does not validate, so a failed update never costs you a working harness.
@@ -116,7 +117,7 @@ flowchart LR
 3. The first launch shows a project picker; choose the folder to open. The choice is remembered.
 4. A few seconds later the window opens on that project.
 
-Close the window to stop the server.
+Closing the window leaves the server running (keep-alive is on by default). To end it, use the tray's "Stop server and exit", or run `DeepSeekHarness.exe --stop`.
 
 ### Build from source
 
@@ -361,7 +362,7 @@ tools/update-icons.ps1     # regenerates the embedded DeepSeek artwork
 
 ## Current status
 
-Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek-ai/dsh` `0.1.5-rc.1`:
+Verified on Windows 11 x64 with .NET 8, WebView2 `153.0.4234.32`, and `@deepseek-ai/dsh` `0.1.5-rc.3`:
 
 - `dotnet build -c Release` — clean build;
 - headless boot (`--no-window`) — OS-assigned port, ready line parsed, endpoint verified, server stopped;
