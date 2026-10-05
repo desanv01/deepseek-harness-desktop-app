@@ -77,6 +77,11 @@ jobs:
 
       - name: Install the harness CLI for the plugin scenarios
         shell: pwsh
+        # The install is an upgrade, not a gate: the suite skips the scenarios that
+        # need a CLI. Without a bound, a registry hang on the runner stalls the whole
+        # job indefinitely instead of degrading. Observed on 2026-10-05, when this
+        # step sat for 50+ minutes with no progress on `npm install -g`.
+        timeout-minutes: 5
         run: |
           # The plugin scenarios need a real harness CLI to initialize profiles.
           # A runner that cannot install it skips those scenarios instead of
