@@ -78,10 +78,17 @@ jobs:
       - name: Install the harness CLI for the plugin scenarios
         shell: pwsh
         # The install is an upgrade, not a gate: the suite skips the scenarios that
-        # need a CLI. Without a bound, a registry hang on the runner stalls the whole
-        # job indefinitely instead of degrading. Observed on 2026-10-05, when this
-        # step sat for 50+ minutes with no progress on `npm install -g`.
-        timeout-minutes: 5
+        # need a CLI. Two bounds keep a bad registry from doing damage.
+        #
+        # 1. `continue-on-error` and the step's own `exit 0` mean a failure here is a
+        #    warning, never a red check.
+        # 2. npm's fetch timeouts are set explicitly. On 2026-10-05 this step hung for
+        #    50+ minutes on `npm install -g`. A bare step `timeout-minutes` is the wrong
+        #    tool: it kills npm mid-install and leaves a half-written global package,
+        #    which then fails the scenarios that follow. Bounding npm's own network
+        #    waits lets it fail cleanly and quickly instead, which the suite can skip.
+        continue-on-error: true
+        timeout-minutes: 6
         run: |
           # The plugin scenarios need a real harness CLI to initialize profiles.
           # A runner that cannot install it skips those scenarios instead of
@@ -92,9 +99,12 @@ jobs:
           # installs a tree whose plugin rows cannot be resolved, which is a
           # broken harness rather than a broken app. The suite probes whether the
           # CLI can boot a server and skips the scenarios that need one.
-          npm install -g @deepseek-ai/dsh@latest --no-audit --no-fund --loglevel=error
+          npm install -g @deepseek-ai/dsh@latest --no-audit --no-fund --loglevel=error `
+            --fetch-timeout=120000 --fetch-retries=1 --fetch-retry-maxtimeout=120000
           if ($LASTEXITCODE -ne 0) {
             Write-Host '::warning::the harness CLI could not be installed; the plugin scenarios will skip'
+            # Leave nothing half-written for the scenarios that follow.
+            npm uninstall -g @deepseek-ai/dsh --no-audit --no-fund 2>$null | Out-Null
           }
           dsh --version
           exit 0
