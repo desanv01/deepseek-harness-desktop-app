@@ -430,8 +430,6 @@ Keep changes focused and explain the user-visible impact. Bug reports are most u
 
 Licensed under the [MIT License](LICENSE).
 
-This project is a derivative of [`ZeroHackz/deepseek-harness-windows-native`](https://github.com/ZeroHackz/deepseek-harness-windows-native); the original MIT notice is preserved. The lifecycle model here was rebuilt around an OS-assigned port, a verified ready line, per-home ownership, and a kill-on-close job object.
-
 DeepSeek Harness itself is developed by DeepSeek. This app is an independent wrapper: it is not affiliated with or endorsed by DeepSeek, and DeepSeek logos are used only to identify the wrapped application.
 
 ---
