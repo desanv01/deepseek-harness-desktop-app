@@ -5,7 +5,7 @@ in the core promise is built, shipped and documented in the [README](README.md).
 
 | Area | State | Notes |
 | --- | --- | --- |
-| 1. GitHub Actions | **done** | `ci.yml` builds and smoke-tests every push and pull request; `release.yml` publishes a tagged build with `SHA256SUMS`; `publish-plugin.yml` publishes the bundled plugin on demand |
+| 1. GitHub Actions | **done** | `ci.yml` builds and smoke-tests every push and pull request; `release.yml` publishes a tagged build with `SHA256SUMS`. A plugin-publish workflow existed and was retired when the plugins moved to their own repositories |
 | 2. Conformance checks | **done, behaviourally** | Two suites run in CI against a real built executable: `tools/smoke-test.ps1` (CLI discovery, repair, install safety, the plugin pipeline, the newer-plugin rule, safe-mode recovery, the served boot graph, and the page bridge's message shapes — 63 assertions) and `tools/client-plugin-smoke.mjs`, which renders the updates plugin's browser half under a minimal React and a fake shell that enforces the real slot rules, so its UI is checked where WebView2 cannot start (53 assertions). Pure-logic unit tests were not built — see §2 |
 | 3. Signed self-update | **done at verification level 1** | Detect, download, checksum-verify, stage, apply, roll back and notify all ship. Authenticode signing and `WinVerifyTrust` were not built — see §3 |
 
@@ -48,13 +48,16 @@ tag produces a release whose assets match the tagged source.
 - `release.yml` — tag `v*`. Refuses a tag that does not equal `v<Version>`, publishes the self-contained
   single-file build, writes `SHA256SUMS` over the exe and the zip, and creates the release with
   `gh release create` (re-running uploads with `--clobber` instead of failing).
-- `publish-plugin.yml` — on demand. Stages a copy of the bundled plugin (the repository copy is
-  `private: true` and carries the app's own files) and publishes it to npm, either through trusted
-  publishing (OIDC) or a `NPM_TOKEN` bypass.
 - `dependabot.yml` — weekly NuGet and GitHub Actions updates.
 
+**Retired.** `publish-plugin.yml` used to stage a copy of the bundled plugin and publish it to npm from this
+repository, through trusted publishing (OIDC) or an `NPM_TOKEN` bypass. It was removed once the plugins moved
+to repositories of their own, which publish themselves; leaving it would have meant a workflow publishing from
+a copy that had already drifted from the plugin's real source. `tools/stage-plugin-package.mjs`, which existed
+only to serve it, was removed with it.
+
 **Notes.** `windows-latest` is required: the project targets `net8.0-windows` and uses WinForms. The
-workflows' only credential is the automatic `GITHUB_TOKEN`; the plugin publish is the sole exception.
+workflows' only credential is the automatic `GITHUB_TOKEN`.
 
 Branch protection requiring the `ci` check is enabled on `main`; force-pushes and deletion are blocked.
 

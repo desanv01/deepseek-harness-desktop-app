@@ -31,13 +31,11 @@ executable, so a newer npm release is not undone by the next launch;
 
 ## Releases
 
-Versions are published from this repository's
-[`publish-plugin.yml`](https://github.com/desanv01/deepseek-harness-desktop-app/blob/main/.github/workflows/publish-plugin.yml)
-workflow with npm trusted publishing: GitHub proves which workflow is running
-over OpenID Connect, and npm issues a short-lived credential in exchange. No
-long-lived npm token exists for this package, so a release is a version bump and
-one workflow run. Trusted publishing makes the registry attach a provenance
-attestation to each release, which the package page shows.
+This folder is the copy the executable embeds. The plugin is developed and
+published from its own repository,
+[`desanv01/dsh-plugin-desktop-updates`](https://github.com/desanv01/dsh-plugin-desktop-updates),
+which is where versions are bumped, tagged and released. Keep the two in step:
+a plugin change that the app should ship has to be copied back here.
 
 ## What it contributes
 
