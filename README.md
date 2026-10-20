@@ -156,21 +156,15 @@ dotnet build -c Release -r win-x64            # or .\build.ps1
 
 `tools\boot-graph-probe.mjs` closes the gap between "the plugin is installed" and "the plugin runs in the page". It takes a running `dsh web` ready line's URL and token, mints the browser session, reads `window.__DSH_BOOT__` out of the served page, fetches the plugin bundle the graph advertises, and checks that the source the browser would run carries the module id, the marker, and the slot ids it needs. The behavioural suite's last scenario boots a real server on a fixture home and runs it, so a plugin the loader never emits or a bundle route that answers `404` fails in CI rather than in the window.
 
-### Publishing the plugin
+### Publishing the bundled plugins
 
-The plugin is distributed inside the executable and on npm. The repository copy is `private: true` — it carries the app's own files, and a stray `npm publish` from a checkout must not push it — so publishing stages a copy of it first:
+**The plugins now live in their own repositories, and that is where they are published from.** See
+[Plugins](#plugins).
 
-```powershell
-node tools\stage-plugin-package.mjs plugins\dsh-plugin-desktop-updates plugin-out
-cd plugin-out; npm publish --access public
-```
-
-`.github/workflows/publish-plugin.yml` does exactly that on demand. Bump the version in `plugins\dsh-plugin-desktop-updates\package.json`, merge it, then run the workflow with the same version: it refuses a version the manifest does not declare and one that is already published. It takes a `method` input:
-
-- **`trusted-publishing-oidc`** is what this package uses. No secret exists anywhere: the runner proves which workflow it is over OpenID Connect, npm exchanges that for a short-lived credential, and the registry attaches a provenance attestation to the release. It needs the workflow's `id-token: write` permission (already set), npm 11.5.1 or later (the step installs the current one), and a trusted publisher configured for the package on npmjs.com — `desanv01` / `deepseek-harness-desktop-app` / `publish-plugin.yml`, with *Allow `npm publish`* ticked, since npm otherwise permits only `npm stage publish`.
-- **`token-with-bypass-2fa`** reads the `NPM_TOKEN` repository secret, and exists for one situation: the first release of a package that has no trusted publisher yet, because a trusted publisher is configured on the package's own settings page and cannot exist before the package does. Such a token must be account-wide, since a granular token can only be scoped to a package that already exists. It only works while the package's *Publishing access* setting allows bypass tokens; a package that requires two-factor authentication and disallows them can be published by a trusted publisher alone.
-
-Two npm behaviours made that bootstrap awkward, and both are recorded here because they are easy to hit again. The registry refuses a publish that carries neither a one-time password nor a token allowed to bypass 2FA, answering `403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.`; and the npm CLI prefers the session token `npm login` leaves in `.npmrc` over a bypass token, which fails the same way — writing the bypass token into `.npmrc` by hand is the way around that, and a CI runner has no session token to conflict with. The npm log also warns that bypass tokens are being restricted for direct publishing, so a trusted publisher is the durable arrangement rather than the token.
+The copies under `plugins\` are not the published packages: they are the **build inputs** the executable
+embeds, and they carry `private: true` so a stray `npm publish` from a checkout cannot push a package shaped
+for this app. Publication, versioning and release notes for each plugin are handled in its own repository, by
+its own workflows.
 
 ### Cutting a release
 
@@ -393,6 +387,25 @@ Known limitations:
 - Update downloads are verified by checksum, not by signature. `SHA256SUMS` comes from the same release as the binary, so it catches a corrupted or altered download, not a compromised release. Authenticode signing and `WinVerifyTrust` at apply time are the remaining step.
 - There is no automated unit-test suite yet; CI builds, checks the version scheme, and smoke-tests the command line, and the manual checks above were run by hand.
 - The UI itself is verified without a browser: the plugin's components are rendered headlessly and the served bundle is read from a live server, but no check drives a real click in WebView2. A machine where the runtime cannot start runs everything except the window.
+
+## Plugins
+
+The two plugins this app ships have their own repositories, which are where they are developed, versioned and
+published:
+
+| Plugin | Repository | What it is |
+| --- | --- | --- |
+| `dsh-plugin-desktop-updates` | [desanv01/dsh-plugin-desktop-updates](https://github.com/desanv01/dsh-plugin-desktop-updates) | The Updates UI: a row beside Settings, a panel, and a Settings section, driven by this app's page bridge |
+| `dsh-plugin-log-bridge` | [desanv01/dsh-plugin-log-bridge](https://github.com/desanv01/dsh-plugin-log-bridge) | Records the harness's own runtime warnings and errors to stderr, so a boot that fails after startup can say why |
+
+**The copies under `plugins\` are the build inputs, not the packages.** The executable embeds those files at
+build time (see `DeepSeekHarness.csproj`), so they have to stay in this repository; a build that lost them would
+fail. Each plugin repository is the source of truth for its own source, README, changelog and releases.
+
+**Keep the two in step.** When a plugin changes in its own repository and the app needs the change, copy the
+files back into `plugins\<name>` in the same session. There is no automated sync — this is the one manual step
+the split introduces, and the reason the copies here are marked `private: true`: nothing may publish them by
+accident.
 
 ## Roadmap
 
