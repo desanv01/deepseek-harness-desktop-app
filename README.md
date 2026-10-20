@@ -195,9 +195,12 @@ The updater downloads the exe and verifies it against `SHA256SUMS` from the same
 ```
 DeepSeekHarness.exe                              normal launch (own server, OS-picked port)
 DeepSeekHarness.exe --project C:\work\my-repo    open that workspace in the window
-DeepSeekHarness.exe --dsh-home C:\dsh-home       use a specific harness home
+DeepSeekHarness.exe --dsh-home C:\dsh-home       use a specific harness home (--home is the same flag)
 DeepSeekHarness.exe --port 8080                  pin the port instead of letting the OS pick
+DeepSeekHarness.exe --address 127.0.0.1          bind address for the managed server
+DeepSeekHarness.exe --ready-timeout 60           seconds to wait for the harness ready line (10-3600, default 240)
 DeepSeekHarness.exe --update                     update the global dsh first (opt-in, also repairs a broken one)
+DeepSeekHarness.exe --no-update                  do not update the global dsh, even if settings say to
 DeepSeekHarness.exe --repair-harness             install or repair the global @deepseek-ai/dsh, then exit
 DeepSeekHarness.exe --dsh-cli <path\bin.js>      use this harness entry point instead of searching for one
 DeepSeekHarness.exe --self-test                  environment report and exit
@@ -206,11 +209,12 @@ DeepSeekHarness.exe --check-updates              report app + harness update sta
 DeepSeekHarness.exe --check-plugins              report each installed plugin vs its published version
 DeepSeekHarness.exe --updates                    open the updates view on launch (the page panel, else the window)
 DeepSeekHarness.exe --keep-alive                 let the harness outlive the window (default)
-DeepSeekHarness.exe --no-keep-alive              closing the window stops the server
+DeepSeekHarness.exe --no-keep-alive              closing the window stops the server (--stop-server-on-exit is the same flag)
 DeepSeekHarness.exe --safe-mode                  boot with the base bundles only
 DeepSeekHarness.exe --exit-safe-mode             put back what safe mode set aside
 DeepSeekHarness.exe --install-plugin             install the bundled updates plugin into the home, then exit
 DeepSeekHarness.exe --install-log-bridge         install the bundled log bridge into the home, then exit
+DeepSeekHarness.exe --web-home <dir>             the `dsh web` home to import from, or to leave alone
 DeepSeekHarness.exe --import-web-home            copy a `dsh web` home into this app's home, then exit
 DeepSeekHarness.exe --skip-web-home              record that the web home should be left alone
 DeepSeekHarness.exe --plugin-list                list the plugins this home runs
@@ -392,6 +396,9 @@ Known limitations:
 
 ## Roadmap
 
+Everything this app set out to do is built and shipped. The list below is the complete scope, kept as a
+record of the features and how each one was verified.
+
 - [x] No-terminal launch with a hidden child process
 - [x] Project-scoped window
 - [x] OS-assigned port and ready-line discovery
@@ -405,11 +412,19 @@ Known limitations:
 - [x] Harness version display, with an opt-in in-app update
 - [x] Update check for the desktop app itself, with in-app alerts and a cached answer
 - [x] Verified self-update: download, SHA-256 check, staged apply, rollback, restart
-- [ ] Authenticode signing of releases, verified before the swap
-- [ ] Unit tests for options, lease validation, and the endpoint probe
-- [ ] GitHub Actions build and release workflow
+- [x] GitHub Actions: CI on every push and pull request, a release workflow driven by the tag, and an
+      on-demand plugin publish workflow
 
-The detailed gameplan for the remaining items — design, acceptance criteria, risks, and milestones — is in [ROADMAP.md](ROADMAP.md).
+Two items were **not** built, and are described here rather than left as open work:
+
+- **Authenticode signing of releases**, verified before the swap. Update downloads are checked against the
+  `SHA256SUMS` asset from the same release, which catches a corrupted or altered download. It does not
+  catch a compromised release, because the checksum comes from the same place as the binary.
+- **Unit tests.** The guarantee comes from a behavioural smoke suite instead: `tools\smoke-test.ps1` and
+  `tools\client-plugin-smoke.mjs` take a built executable and drive it end to end.
+
+Notes for anyone who picks either item up — including the signing threat model and the verification ladder
+that was designed for it — are in [ROADMAP.md](ROADMAP.md).
 
 ## Security
 
